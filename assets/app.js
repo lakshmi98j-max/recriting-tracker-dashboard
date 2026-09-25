@@ -122,8 +122,15 @@
     return '<a class="link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener">' + escapeHtml(text) + "</a>";
   }
 
+  // A contact the owner has decided to answer on a later date: nothing is
+  // owed until then, so tiles and summaries leave them out.
+  function isSnoozed(contact) {
+    var n = daysFromToday(contact.respond_on);
+    return n !== null && n > 0;
+  }
+
   function isAwaitingMyReply(contact) {
-    return contact.last_touch_by === "them" && contact.stage !== "closed";
+    return contact.last_touch_by === "them" && contact.stage !== "closed" && !isSnoozed(contact);
   }
 
   function todayIso() {
@@ -253,7 +260,7 @@
   function renderTiles() {
     var open = state.todos.filter(function (t) { return t.status === "open"; });
     var high = open.filter(function (t) { return t.priority === "high"; });
-    var followUps = state.contacts.filter(function (c) { return c.stage === "follow_up_needed"; });
+    var followUps = state.contacts.filter(function (c) { return c.stage === "follow_up_needed" && !isSnoozed(c); });
     var awaiting = state.contacts.filter(isAwaitingMyReply);
     byId("tile-open").textContent = open.length;
     byId("tile-high").textContent = high.length;
@@ -332,7 +339,34 @@
   }
 
   function hasDetails(c) {
-    return !!((c.last_message && c.last_message.excerpt) || c.draft_reply);
+    return true; // every row has the plan and notes panel
+  }
+
+  function planHtml(c) {
+    var notes = Array.isArray(c.owner_notes) ? c.owner_notes : [];
+    var noteItems = notes.map(function (n) {
+      return '<li><span class="note-date">' + escapeHtml(formatDate(n.date)) + "</span>" + escapeHtml(n.text) + "</li>";
+    }).join("");
+    var respond = c.respond_on || "";
+    var snoozed = isSnoozed(c);
+    return (
+      '<div class="details-block details-plan">' +
+      '<div class="details-title">My plan and notes</div>' +
+      '<form class="plan-form" data-form="respond-on" data-id="' + escapeHtml(c.id) + '">' +
+      "<label>Respond on " +
+      '<input type="date" name="respond_on" value="' + escapeHtml(respond) + '">' +
+      "</label>" +
+      '<button type="submit" class="btn btn-small">Save date</button>' +
+      (respond ? '<button type="button" class="btn btn-small btn-quiet" data-action="clear-respond-on" data-id="' + escapeHtml(c.id) + '">Clear</button>' : "") +
+      (snoozed ? '<span class="plan-state">Snoozed until ' + escapeHtml(formatDate(respond)) + ", nothing is due before then</span>" : "") +
+      "</form>" +
+      (noteItems ? '<ul class="notes-list">' + noteItems + "</ul>" : "") +
+      '<form class="note-form" data-form="note" data-id="' + escapeHtml(c.id) + '">' +
+      '<textarea name="note" rows="2" maxlength="1000" placeholder="A note only you write. The agent reads it when drafting and never changes it."></textarea>' +
+      '<button type="submit" class="btn btn-small">Add note</button>' +
+      "</form>" +
+      "</div>"
+    );
   }
 
   function detailsHtml(c) {
@@ -360,6 +394,7 @@
         "</div>"
       );
     }
+    blocks.push(planHtml(c));
     return '<tr class="details-row"><td colspan="6"><div class="details">' + blocks.join("") + "</div></td></tr>";
   }
 
@@ -385,7 +420,9 @@
       '<td><div class="primary">' + escapeHtml(sinceText) + "</div>" +
       (c.last_touch ? '<div class="secondary">' + escapeHtml(formatDate(c.last_touch) + by) + "</div>" : "") + "</td>" +
       '<td><div class="primary">' + (c.next_action ? escapeHtml(c.next_action) : '<span class="muted">none</span>') + "</div>" +
-      (nextDate ? '<div class="secondary due ' + nextDate.cls + '">' + escapeHtml(nextDate.text) + "</div>" : "") + "</td>" +
+      (isSnoozed(c)
+        ? '<div class="secondary due later">respond on ' + escapeHtml(formatDate(c.respond_on)) + "</div>"
+        : (nextDate ? '<div class="secondary due ' + nextDate.cls + '">' + escapeHtml(nextDate.text) + "</div>" : "")) + "</td>" +
       '<td class="thread-cell"><div class="row-actions">' + (c.thread_url ? link(c.thread_url, "Open") : '<span class="muted">none</span>') + detailsButton + stageButton + "</div></td>" +
       "</tr>" +
       (expanded ? detailsHtml(c) : "")
@@ -503,9 +540,11 @@
     }
   }
 
-  // Read a data file from the repo, change one record, write it back as a
-  // commit. Retries once when the file changed under us (409 or 422).
-  function saveRecord(filePath, listKey, id, mutate, message) {
+  // Read a data file from the repo, let mutateList change it, write it back
+  // as a commit. mutateList(list, today) returns the records it changed; an
+  // empty result means nothing is written. Retries once when the file changed
+  // under us (409 or 422).
+  function saveFile(filePath, listKey, mutateList, message) {
     var path = "/repos/" + github.repo + "/contents/" + filePath;
     var today = todayIso();
 
@@ -515,10 +554,9 @@
         var data = JSON.parse(base64ToUtf8(file.content));
         var list = Array.isArray(data) ? data : data[listKey];
         if (!Array.isArray(list)) throw new Error(filePath + " on GitHub has an unexpected shape.");
-        var record = findTodo(list, id);
-        if (!record) throw new Error(id + " is not in the latest " + filePath + " on GitHub. Reload the page.");
-        mutate(record, today);
-        record.updated_at = today;
+        var changed = mutateList(list, today) || [];
+        if (!changed.length) return changed;
+        changed.forEach(function (record) { record.updated_at = today; });
         if (!Array.isArray(data)) data.updated_at = today;
         var body = {
           message: message,
@@ -526,7 +564,7 @@
           sha: file.sha,
           branch: github.branch
         };
-        return githubRequest("PUT", path, body).then(function () { return record; });
+        return githubRequest("PUT", path, body).then(function () { return changed; });
       }).catch(function (err) {
         if ((err.status === 409 || err.status === 422) && retriesLeft > 0) return attempt(retriesLeft - 1);
         throw err;
@@ -535,15 +573,34 @@
     return attempt(1);
   }
 
-  function requireToken(action, message) {
+  function saveRecord(filePath, listKey, id, mutate, message) {
+    return saveFile(filePath, listKey, function (list, today) {
+      var record = findTodo(list, id);
+      if (!record) throw new Error(id + " is not in the latest " + filePath + " on GitHub. Reload the page.");
+      mutate(record, today);
+      return [record];
+    }, message).then(function (changed) { return changed[0]; });
+  }
+
+  // Without a token, remember what was asked and open the connect dialog;
+  // the action runs once the token is saved.
+  function requireToken(run, message) {
     if (github.token) return true;
-    pendingAction = action;
+    pendingAction = { run: run };
     openGithubDialog(message || "Connect GitHub once to save changes from this page.");
     return false;
   }
 
+  function copyContactFields(id, saved) {
+    var local = state.contactsById[id];
+    if (!local) return;
+    ["stage", "next_action", "next_action_date", "draft_reply", "history", "respond_on", "owner_notes", "updated_at"].forEach(function (key) {
+      if (key in saved) local[key] = saved[key];
+    });
+  }
+
   function setTodoStatus(id, status, button) {
-    if (!requireToken({ kind: "todo", id: id, status: status })) return;
+    if (!requireToken(function () { setTodoStatus(id, status, el.todoList.querySelector('button[data-id="' + id + '"]')); })) return;
     setBusy(button, true);
     saveRecord(TODOS_URL, "todos", id, function (todo, today) {
       todo.status = status;
@@ -577,7 +634,7 @@
   }
 
   function setContactStage(id, action, button) {
-    if (!requireToken({ kind: "contact", id: id, status: action })) return;
+    if (!requireToken(function () { setContactStage(id, action, el.peopleBody.querySelector('button[data-action][data-id="' + id + '"]')); })) return;
     setBusy(button, true);
     var closing = action === "close";
     saveRecord(CONTACTS_URL, "contacts", id, function (contact, today) {
@@ -593,19 +650,60 @@
         contact.history.push({ date: today, event: "Reopened from the dashboard" });
       }
     }, "update: " + id + (closing ? " closed" : " reopened") + " (dashboard)").then(function (saved) {
-      var local = state.contactsById[id];
-      if (local) {
-        local.stage = saved.stage;
-        local.next_action = saved.next_action;
-        local.next_action_date = saved.next_action_date;
-        local.draft_reply = saved.draft_reply;
-        local.history = saved.history;
-        local.updated_at = saved.updated_at;
-      }
+      copyContactFields(id, saved);
       state.contactsUpdated = saved.updated_at;
       state.live = true;
       render();
       toast((closing ? "Closed " : "Reopened ") + id + " and saved to GitHub.");
+    }).catch(function (err) {
+      setBusy(button, false);
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  }
+
+  // "I will respond on this date": owner-only field. Also moves the due date
+  // of the contact's open todos to that day so the list agrees.
+  function setRespondOn(id, dateStr, button) {
+    if (!requireToken(function () { setRespondOn(id, dateStr, null); })) return;
+    setBusy(button, true);
+    var message = "update: " + id + (dateStr ? " respond on " + dateStr : " respond date cleared") + " (dashboard)";
+    saveRecord(CONTACTS_URL, "contacts", id, function (contact) {
+      contact.respond_on = dateStr || null;
+    }, message).then(function (saved) {
+      copyContactFields(id, saved);
+      state.contactsUpdated = saved.updated_at;
+      if (!dateStr) return [];
+      return saveFile(TODOS_URL, "todos", function (list) {
+        return list.filter(function (t) { return t.contact_id === id && t.status === "open" && t.due !== dateStr; })
+          .map(function (t) { t.due = dateStr; return t; });
+      }, "update: todos for " + id + " due " + dateStr + " (dashboard)");
+    }).then(function (changedTodos) {
+      (changedTodos || []).forEach(function (t) {
+        var local = findTodo(state.todos, t.id);
+        if (local) { local.due = t.due; local.updated_at = t.updated_at; }
+      });
+      state.live = true;
+      render();
+      toast(dateStr ? "Saved: respond on " + formatDate(dateStr) + "." : "Respond date cleared.");
+    }).catch(function (err) {
+      setBusy(button, false);
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  }
+
+  // Append-only notes from the owner. The agent reads them, never edits them.
+  function addOwnerNote(id, text, button) {
+    if (!requireToken(function () { addOwnerNote(id, text, null); })) return;
+    setBusy(button, true);
+    saveRecord(CONTACTS_URL, "contacts", id, function (contact, today) {
+      if (!Array.isArray(contact.owner_notes)) contact.owner_notes = [];
+      contact.owner_notes.push({ date: today, text: text });
+    }, "update: " + id + " note (dashboard)").then(function (saved) {
+      copyContactFields(id, saved);
+      state.contactsUpdated = saved.updated_at;
+      state.live = true;
+      render();
+      toast("Note saved.");
     }).catch(function (err) {
       setBusy(button, false);
       toast(err && err.message ? err.message : String(err), true);
@@ -656,13 +754,7 @@
     if (pendingAction) {
       var action = pendingAction;
       pendingAction = null;
-      if (action.kind === "contact") {
-        var contactButton = el.peopleBody.querySelector('button[data-action][data-id="' + action.id + '"]');
-        setContactStage(action.id, action.status, contactButton);
-      } else {
-        var button = el.todoList.querySelector('button[data-id="' + action.id + '"]');
-        setTodoStatus(action.id, action.status, button);
-      }
+      action.run();
     } else if (token) {
       // A fresh token means the page can now read the live files; reload them.
       loadAndRender();
@@ -738,6 +830,8 @@
       setContactStage(id, "close", button);
     } else if (action === "reopen-contact") {
       setContactStage(id, "reopen", button);
+    } else if (action === "clear-respond-on") {
+      setRespondOn(id, "", button);
     } else if (action === "toggle-details") {
       if (state.expanded[id]) delete state.expanded[id];
       else state.expanded[id] = true;
@@ -753,6 +847,25 @@
     }
   }
 
+  function onPeopleSubmit(event) {
+    var form = event.target;
+    if (!form || !form.getAttribute) return;
+    var kind = form.getAttribute("data-form");
+    if (!kind) return;
+    event.preventDefault();
+    var id = form.getAttribute("data-id");
+    var button = form.querySelector('button[type="submit"]');
+    if (kind === "respond-on") {
+      var dateStr = form.querySelector('input[name="respond_on"]').value.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { toast("Pick a date first.", true); return; }
+      setRespondOn(id, dateStr, button);
+    } else if (kind === "note") {
+      var text = form.querySelector('textarea[name="note"]').value.trim();
+      if (!text) { toast("Write the note first.", true); return; }
+      addOwnerNote(id, text, button);
+    }
+  }
+
   function bind() {
     el.todoStatus.addEventListener("change", renderTodos);
     el.todoPriority.addEventListener("change", renderTodos);
@@ -760,6 +873,7 @@
     el.peopleSearch.addEventListener("input", renderPeople);
     el.todoList.addEventListener("click", onTodoListClick);
     el.peopleBody.addEventListener("click", onPeopleClick);
+    el.peopleBody.addEventListener("submit", onPeopleSubmit);
     el.githubConnect.addEventListener("click", function () { openGithubDialog(""); });
     el.githubForm.addEventListener("submit", onGithubSave);
     el.githubCancel.addEventListener("click", function () { pendingAction = null; closeGithubDialog(); });
