@@ -372,6 +372,9 @@
     var detailsButton = hasDetails(c)
       ? '<button type="button" class="btn btn-small btn-quiet details-toggle" data-action="toggle-details" data-id="' + escapeHtml(c.id) + '" aria-expanded="' + expanded + '">' + (expanded ? "Hide" : "Details") + (c.draft_reply && !expanded ? '<span class="draft-dot" title="Draft reply ready"></span>' : "") + "</button>"
       : "";
+    var stageButton = c.stage === "closed"
+      ? '<button type="button" class="btn btn-small btn-quiet" data-action="reopen-contact" data-id="' + escapeHtml(c.id) + '">Reopen</button>'
+      : '<button type="button" class="btn btn-small btn-quiet" data-action="close-contact" data-id="' + escapeHtml(c.id) + '" title="Mark this person closed; only you can do that">Close</button>';
     return (
       "<tr" + (isSample(c) ? ' class="sample"' : "") + ' data-id="' + escapeHtml(c.id) + '">' +
       '<td><div class="primary">' + escapeHtml(c.name) + sampleTag(c) + "</div>" +
@@ -383,7 +386,7 @@
       (c.last_touch ? '<div class="secondary">' + escapeHtml(formatDate(c.last_touch) + by) + "</div>" : "") + "</td>" +
       '<td><div class="primary">' + (c.next_action ? escapeHtml(c.next_action) : '<span class="muted">none</span>') + "</div>" +
       (nextDate ? '<div class="secondary due ' + nextDate.cls + '">' + escapeHtml(nextDate.text) + "</div>" : "") + "</td>" +
-      '<td class="thread-cell">' + (c.thread_url ? link(c.thread_url, "Open") : '<span class="muted">none</span>') + detailsButton + "</td>" +
+      '<td class="thread-cell"><div class="row-actions">' + (c.thread_url ? link(c.thread_url, "Open") : '<span class="muted">none</span>') + detailsButton + stageButton + "</div></td>" +
       "</tr>" +
       (expanded ? detailsHtml(c) : "")
     );
@@ -500,53 +503,109 @@
     }
   }
 
-  function setTodoStatus(id, status, button) {
-    if (!github.token) {
-      pendingAction = { id: id, status: status };
-      openGithubDialog("Connect GitHub once to save changes from this page.");
-      return;
-    }
-    var path = "/repos/" + github.repo + "/contents/" + TODOS_URL;
+  // Read a data file from the repo, change one record, write it back as a
+  // commit. Retries once when the file changed under us (409 or 422).
+  function saveRecord(filePath, listKey, id, mutate, message) {
+    var path = "/repos/" + github.repo + "/contents/" + filePath;
     var today = todayIso();
-    setBusy(button, true);
 
     function attempt(retriesLeft) {
       return githubRequest("GET", path + "?ref=" + encodeURIComponent(github.branch)).then(function (file) {
-        if (!file || !file.content || !file.sha) throw new Error("Unexpected response from GitHub when reading todos.json.");
+        if (!file || !file.content || !file.sha) throw new Error("Unexpected response from GitHub when reading " + filePath + ".");
         var data = JSON.parse(base64ToUtf8(file.content));
-        var todos = Array.isArray(data) ? data : data.todos;
-        if (!Array.isArray(todos)) throw new Error("todos.json on GitHub has an unexpected shape.");
-        var todo = findTodo(todos, id);
-        if (!todo) throw new Error(id + " is not in the latest todos.json on GitHub. Reload the page.");
-        todo.status = status;
-        todo.completed = status === "done" ? today : null;
-        todo.updated_at = today;
+        var list = Array.isArray(data) ? data : data[listKey];
+        if (!Array.isArray(list)) throw new Error(filePath + " on GitHub has an unexpected shape.");
+        var record = findTodo(list, id);
+        if (!record) throw new Error(id + " is not in the latest " + filePath + " on GitHub. Reload the page.");
+        mutate(record, today);
+        record.updated_at = today;
         if (!Array.isArray(data)) data.updated_at = today;
         var body = {
-          message: "update: " + id + (status === "done" ? " done" : " reopened") + " (dashboard)",
+          message: message,
           content: utf8ToBase64(JSON.stringify(data, null, 2) + "\n"),
           sha: file.sha,
           branch: github.branch
         };
-        return githubRequest("PUT", path, body).then(function () { return todo; });
+        return githubRequest("PUT", path, body).then(function () { return record; });
       }).catch(function (err) {
-        // 409 or 422 means the file changed under us; read it again and retry once.
         if ((err.status === 409 || err.status === 422) && retriesLeft > 0) return attempt(retriesLeft - 1);
         throw err;
       });
     }
+    return attempt(1);
+  }
 
-    attempt(1).then(function (saved) {
+  function requireToken(action, message) {
+    if (github.token) return true;
+    pendingAction = action;
+    openGithubDialog(message || "Connect GitHub once to save changes from this page.");
+    return false;
+  }
+
+  function setTodoStatus(id, status, button) {
+    if (!requireToken({ kind: "todo", id: id, status: status })) return;
+    setBusy(button, true);
+    saveRecord(TODOS_URL, "todos", id, function (todo, today) {
+      todo.status = status;
+      todo.completed = status === "done" ? today : null;
+    }, "update: " + id + (status === "done" ? " done" : " reopened") + " (dashboard)").then(function (saved) {
       var local = findTodo(state.todos, id);
       if (local) {
         local.status = saved.status;
         local.completed = saved.completed;
         local.updated_at = saved.updated_at;
       }
-      state.todosUpdated = today;
+      state.todosUpdated = saved.updated_at;
       state.live = true;
       render();
       toast("Saved " + id + " to GitHub.");
+    }).catch(function (err) {
+      setBusy(button, false);
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  }
+
+  // The stage a reopened contact gets, following the derivation rules the
+  // agent uses: who touched last, and how long ago.
+  function derivedStage(contact, today) {
+    if (contact.last_touch_by === "them") return "response_received";
+    if (contact.last_touch_by === "me" && contact.last_touch) {
+      var days = -daysFromToday(contact.last_touch);
+      return days >= 4 ? "follow_up_needed" : "emailed";
+    }
+    return "to_reach_out";
+  }
+
+  function setContactStage(id, action, button) {
+    if (!requireToken({ kind: "contact", id: id, status: action })) return;
+    setBusy(button, true);
+    var closing = action === "close";
+    saveRecord(CONTACTS_URL, "contacts", id, function (contact, today) {
+      if (!Array.isArray(contact.history)) contact.history = [];
+      if (closing) {
+        contact.stage = "closed";
+        contact.next_action = null;
+        contact.next_action_date = null;
+        contact.draft_reply = null;
+        contact.history.push({ date: today, event: "Closed from the dashboard" });
+      } else {
+        contact.stage = derivedStage(contact, today);
+        contact.history.push({ date: today, event: "Reopened from the dashboard" });
+      }
+    }, "update: " + id + (closing ? " closed" : " reopened") + " (dashboard)").then(function (saved) {
+      var local = state.contactsById[id];
+      if (local) {
+        local.stage = saved.stage;
+        local.next_action = saved.next_action;
+        local.next_action_date = saved.next_action_date;
+        local.draft_reply = saved.draft_reply;
+        local.history = saved.history;
+        local.updated_at = saved.updated_at;
+      }
+      state.contactsUpdated = saved.updated_at;
+      state.live = true;
+      render();
+      toast((closing ? "Closed " : "Reopened ") + id + " and saved to GitHub.");
     }).catch(function (err) {
       setBusy(button, false);
       toast(err && err.message ? err.message : String(err), true);
@@ -597,8 +656,13 @@
     if (pendingAction) {
       var action = pendingAction;
       pendingAction = null;
-      var button = el.todoList.querySelector('button[data-id="' + action.id + '"]');
-      setTodoStatus(action.id, action.status, button);
+      if (action.kind === "contact") {
+        var contactButton = el.peopleBody.querySelector('button[data-action][data-id="' + action.id + '"]');
+        setContactStage(action.id, action.status, contactButton);
+      } else {
+        var button = el.todoList.querySelector('button[data-id="' + action.id + '"]');
+        setTodoStatus(action.id, action.status, button);
+      }
     } else if (token) {
       // A fresh token means the page can now read the live files; reload them.
       loadAndRender();
@@ -667,10 +731,14 @@
 
   function onPeopleClick(event) {
     var button = event.target.closest ? event.target.closest("button[data-action]") : null;
-    if (!button) return;
+    if (!button || button.disabled) return;
     var id = button.getAttribute("data-id");
     var action = button.getAttribute("data-action");
-    if (action === "toggle-details") {
+    if (action === "close-contact") {
+      setContactStage(id, "close", button);
+    } else if (action === "reopen-contact") {
+      setContactStage(id, "reopen", button);
+    } else if (action === "toggle-details") {
       if (state.expanded[id]) delete state.expanded[id];
       else state.expanded[id] = true;
       renderPeople();

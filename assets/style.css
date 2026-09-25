@@ -520,8 +520,10 @@ tr.sample td, .todo.sample {
   white-space: nowrap;
 }
 
-.thread-cell .details-toggle {
-  margin-left: 8px;
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .draft-dot {
