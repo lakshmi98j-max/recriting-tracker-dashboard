@@ -35,7 +35,8 @@
     contactsById: {},
     contactsUpdated: null,
     todosUpdated: null,
-    live: false
+    live: false,
+    expanded: {}
   };
 
   var github = { repo: "", branch: "main", token: "", apiBase: DEFAULT_API_BASE };
@@ -330,13 +331,49 @@
     return String(a.name || "").localeCompare(String(b.name || ""));
   }
 
+  function hasDetails(c) {
+    return !!((c.last_message && c.last_message.excerpt) || c.draft_reply);
+  }
+
+  function detailsHtml(c) {
+    var blocks = [];
+    if (c.last_message && c.last_message.excerpt) {
+      var lm = c.last_message;
+      var who = lm.from === "me" ? "from me" : "from " + (lm.sender || "them");
+      blocks.push(
+        '<div class="details-block">' +
+        '<div class="details-title">Last message, ' + escapeHtml(formatDate(lm.date)) + ", " + escapeHtml(who) + "</div>" +
+        '<pre class="details-text">' + escapeHtml(lm.excerpt) + "</pre>" +
+        "</div>"
+      );
+    }
+    if (c.draft_reply) {
+      blocks.push(
+        '<div class="details-block">' +
+        '<div class="details-title">Draft reply' +
+        '<span class="details-actions">' +
+        '<button type="button" class="btn btn-small" data-action="copy-draft" data-id="' + escapeHtml(c.id) + '">Copy</button>' +
+        (c.thread_url ? link(c.thread_url, "Open thread") : "") +
+        "</span></div>" +
+        '<pre class="details-text">' + escapeHtml(c.draft_reply) + "</pre>" +
+        '<div class="details-note">Nothing is sent from here. Copy it, paste it into Gmail, adjust, send.</div>' +
+        "</div>"
+      );
+    }
+    return '<tr class="details-row"><td colspan="6"><div class="details">' + blocks.join("") + "</div></td></tr>";
+  }
+
   function personHtml(c) {
     var since = daysSince(c.last_touch);
     var sinceText = since === null ? "never" : since === 0 ? "today" : since < 0 ? "in " + plural(-since, "day") : plural(since, "day") + " ago";
     var by = c.last_touch_by ? " by " + c.last_touch_by : "";
     var nextDate = c.next_action_date ? relativeDue(c.next_action_date, "date") : null;
+    var expanded = !!state.expanded[c.id];
+    var detailsButton = hasDetails(c)
+      ? '<button type="button" class="btn btn-small btn-quiet details-toggle" data-action="toggle-details" data-id="' + escapeHtml(c.id) + '" aria-expanded="' + expanded + '">' + (expanded ? "Hide" : "Details") + (c.draft_reply && !expanded ? '<span class="draft-dot" title="Draft reply ready"></span>' : "") + "</button>"
+      : "";
     return (
-      "<tr" + (isSample(c) ? ' class="sample"' : "") + ">" +
+      "<tr" + (isSample(c) ? ' class="sample"' : "") + ' data-id="' + escapeHtml(c.id) + '">' +
       '<td><div class="primary">' + escapeHtml(c.name) + sampleTag(c) + "</div>" +
       (c.email ? '<div class="secondary">' + escapeHtml(c.email) + "</div>" : "") + "</td>" +
       '<td><div class="primary">' + escapeHtml(c.company) + "</div>" +
@@ -346,8 +383,9 @@
       (c.last_touch ? '<div class="secondary">' + escapeHtml(formatDate(c.last_touch) + by) + "</div>" : "") + "</td>" +
       '<td><div class="primary">' + (c.next_action ? escapeHtml(c.next_action) : '<span class="muted">none</span>') + "</div>" +
       (nextDate ? '<div class="secondary due ' + nextDate.cls + '">' + escapeHtml(nextDate.text) + "</div>" : "") + "</td>" +
-      "<td>" + (c.thread_url ? link(c.thread_url, "Open") : '<span class="muted">none</span>') + "</td>" +
-      "</tr>"
+      '<td class="thread-cell">' + (c.thread_url ? link(c.thread_url, "Open") : '<span class="muted">none</span>') + detailsButton + "</td>" +
+      "</tr>" +
+      (expanded ? detailsHtml(c) : "")
     );
   }
 
@@ -610,12 +648,50 @@
     setTodoStatus(button.getAttribute("data-id"), status, button);
   }
 
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      ok ? resolve() : reject(new Error("copy failed"));
+    });
+  }
+
+  function onPeopleClick(event) {
+    var button = event.target.closest ? event.target.closest("button[data-action]") : null;
+    if (!button) return;
+    var id = button.getAttribute("data-id");
+    var action = button.getAttribute("data-action");
+    if (action === "toggle-details") {
+      if (state.expanded[id]) delete state.expanded[id];
+      else state.expanded[id] = true;
+      renderPeople();
+    } else if (action === "copy-draft") {
+      var contact = state.contactsById[id];
+      if (!contact || !contact.draft_reply) return;
+      copyText(contact.draft_reply).then(function () {
+        toast("Draft copied. Paste it into Gmail, adjust, and send.");
+      }, function () {
+        toast("Could not copy automatically; select the text and copy it.", true);
+      });
+    }
+  }
+
   function bind() {
     el.todoStatus.addEventListener("change", renderTodos);
     el.todoPriority.addEventListener("change", renderTodos);
     el.peopleStage.addEventListener("change", renderPeople);
     el.peopleSearch.addEventListener("input", renderPeople);
     el.todoList.addEventListener("click", onTodoListClick);
+    el.peopleBody.addEventListener("click", onPeopleClick);
     el.githubConnect.addEventListener("click", function () { openGithubDialog(""); });
     el.githubForm.addEventListener("submit", onGithubSave);
     el.githubCancel.addEventListener("click", function () { pendingAction = null; closeGithubDialog(); });
