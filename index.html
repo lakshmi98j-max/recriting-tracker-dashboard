@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Personal recruiting and networking tracker. Static dashboard over data/contacts.json and data/todos.json.">
+  <!-- Repo and branch the Mark done / Reopen buttons commit to through the GitHub API. -->
+  <meta name="tracker-repo" content="lakshmi98j-max/recriting-tracker-2">
+  <meta name="tracker-branch" content="main">
+  <title>Recruiting Tracker</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <h1>Recruiting Tracker</h1>
+        <p class="meta" id="meta">Loading data...</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="github-state" id="github-state">Read only</span>
+        <button class="btn" type="button" id="github-connect">Connect GitHub</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="error" class="error" role="alert" hidden></div>
+
+    <section class="tiles" aria-label="Summary">
+      <button class="tile" type="button" data-tile="open" title="Show open todos">
+        <span class="tile-value" id="tile-open">0</span>
+        <span class="tile-label">Open todos</span>
+      </button>
+      <button class="tile tile-high" type="button" data-tile="high" title="Show open high priority todos">
+        <span class="tile-value" id="tile-high">0</span>
+        <span class="tile-label">High priority</span>
+      </button>
+      <button class="tile tile-follow" type="button" data-tile="follow" title="Show contacts that need a follow-up">
+        <span class="tile-value" id="tile-follow">0</span>
+        <span class="tile-label">Follow-ups needed</span>
+      </button>
+      <button class="tile tile-await" type="button" data-tile="awaiting" title="Show contacts waiting on my reply">
+        <span class="tile-value" id="tile-awaiting">0</span>
+        <span class="tile-label">Awaiting my reply</span>
+      </button>
+    </section>
+
+    <section class="panel" id="todos-panel" aria-labelledby="todos-heading">
+      <div class="panel-head">
+        <h2 id="todos-heading">Todos <span class="count" id="todo-count"></span></h2>
+        <div class="controls">
+          <label>Status
+            <select id="todo-status">
+              <option value="open" selected>Open</option>
+              <option value="done">Done</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <label>Priority
+            <select id="todo-priority">
+              <option value="all" selected>All</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <ul id="todo-list" class="todo-list"></ul>
+      <p id="todo-empty" class="empty" hidden>No todos match these filters.</p>
+    </section>
+
+    <section class="panel" id="people-panel" aria-labelledby="people-heading">
+      <div class="panel-head">
+        <h2 id="people-heading">People <span class="count" id="people-count"></span></h2>
+        <div class="controls">
+          <label>Stage
+            <select id="people-stage">
+              <option value="active" selected>Active (not closed)</option>
+              <option value="all">All</option>
+              <option value="awaiting">Awaiting my reply</option>
+              <option value="to_reach_out">To reach out</option>
+              <option value="emailed">Emailed</option>
+              <option value="follow_up_needed">Follow-up needed</option>
+              <option value="response_received">Response received</option>
+              <option value="call_scheduled">Call scheduled</option>
+              <option value="closed">Closed</option>
+            </select>
+          </label>
+          <label class="search">Search
+            <input type="search" id="people-search" placeholder="name, company, role, notes" autocomplete="off">
+          </label>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="people-table">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Company</th>
+              <th scope="col">Stage</th>
+              <th scope="col">Last touch</th>
+              <th scope="col">Next action</th>
+              <th scope="col">Thread</th>
+            </tr>
+          </thead>
+          <tbody id="people-body"></tbody>
+        </table>
+      </div>
+      <p id="people-empty" class="empty" hidden>No contacts match these filters.</p>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    <p>Data lives in <code>data/contacts.json</code> and <code>data/todos.json</code>. Edit them through the agent, run <code>scripts/validate.py</code>, commit, push. No servers, no cost.</p>
+  </footer>
+
+  <dialog id="github-dialog" class="dialog" aria-labelledby="github-dialog-title">
+    <form id="github-form" novalidate>
+      <h2 id="github-dialog-title">Save changes from this page</h2>
+      <p>The Mark done and Reopen buttons commit <code>data/todos.json</code> straight to GitHub. That needs a token, which is stored only in this browser and sent only to the GitHub API.</p>
+      <ol class="dialog-steps">
+        <li>Create a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained personal access token</a>.</li>
+        <li>Repository access: only this repository. Permissions: Contents, Read and write.</li>
+        <li>Paste it below and save.</li>
+      </ol>
+      <label>Repository
+        <input id="github-repo" type="text" placeholder="owner/repo" autocomplete="off" spellcheck="false">
+      </label>
+      <label>Token
+        <input id="github-token" type="password" autocomplete="off" placeholder="github_pat_...">
+      </label>
+      <p class="dialog-error" id="github-error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-quiet" id="github-disconnect">Disconnect</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-quiet" id="github-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="github-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
