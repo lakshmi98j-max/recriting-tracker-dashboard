@@ -36,7 +36,8 @@
     contactsUpdated: null,
     todosUpdated: null,
     live: false,
-    expanded: {}
+    expanded: {},
+    laterOpen: {}
   };
 
   var github = { repo: "", branch: "main", token: "", apiBase: DEFAULT_API_BASE };
@@ -131,6 +132,26 @@
 
   function isAwaitingMyReply(contact) {
     return contact.last_touch_by === "them" && contact.stage !== "closed" && !isSnoozed(contact);
+  }
+
+  // Date helpers for the Later presets: ISO date n days from today, and the
+  // next Monday (a week ahead when today is Monday).
+  function isoPlusDays(n) {
+    var d = startOfToday();
+    d.setDate(d.getDate() + n);
+    return isoOf(d);
+  }
+
+  function isoNextMonday() {
+    var d = startOfToday();
+    var delta = (8 - d.getDay()) % 7 || 7;
+    d.setDate(d.getDate() + delta);
+    return isoOf(d);
+  }
+
+  function isoOf(d) {
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
   }
 
   function todayIso() {
@@ -295,9 +316,24 @@
     if (t.company) bits.push("<span>" + escapeHtml(t.company) + "</span>");
     if (contact) bits.push("<span>" + escapeHtml(contact.name) + "</span>");
     if (t.source_thread_url) bits.push(link(t.source_thread_url, "Gmail thread"));
+    if (t.source === "dashboard") bits.push('<span class="own-tag" title="Added by you on this page; the agent never changes it">mine</span>');
+    var laterOpen = !!state.laterOpen[t.id];
     var action = t.status === "open"
-      ? '<button type="button" class="btn btn-small" data-action="done" data-id="' + escapeHtml(t.id) + '">Mark done</button>'
+      ? '<button type="button" class="btn btn-small btn-quiet" data-action="later" data-id="' + escapeHtml(t.id) + '" aria-expanded="' + laterOpen + '" title="Move the due date">Later</button>' +
+        '<button type="button" class="btn btn-small" data-action="done" data-id="' + escapeHtml(t.id) + '">Mark done</button>'
       : '<button type="button" class="btn btn-small btn-quiet" data-action="open" data-id="' + escapeHtml(t.id) + '">Reopen</button>';
+    var later = "";
+    if (t.status === "open" && laterOpen) {
+      later = '<form class="later-row" data-form="todo-due" data-id="' + escapeHtml(t.id) + '">' +
+        '<span class="rewrite-label">Remind me</span>' +
+        '<button type="button" class="chip" data-action="snooze" data-id="' + escapeHtml(t.id) + '" data-date="' + isoPlusDays(1) + '">Tomorrow</button>' +
+        '<button type="button" class="chip" data-action="snooze" data-id="' + escapeHtml(t.id) + '" data-date="' + isoPlusDays(3) + '">In 3 days</button>' +
+        '<button type="button" class="chip" data-action="snooze" data-id="' + escapeHtml(t.id) + '" data-date="' + isoNextMonday() + '">Next Monday</button>' +
+        '<button type="button" class="chip" data-action="snooze" data-id="' + escapeHtml(t.id) + '" data-date="' + isoPlusDays(7) + '">In a week</button>' +
+        '<label>or on <input type="date" name="due" value="' + escapeHtml(t.due || "") + '"></label>' +
+        '<button type="submit" class="btn btn-small">Save date</button>' +
+        "</form>";
+    }
     return (
       '<li class="todo status-' + escapeHtml(t.status) + " priority-" + escapeHtml(t.priority) + (isSample(t) ? " sample" : "") + '" data-id="' + escapeHtml(t.id) + '">' +
       '<div class="todo-row">' +
@@ -305,6 +341,7 @@
       '<div class="todo-title">' + escapeHtml(t.title) + sampleTag(t) + "</div>" +
       '<div class="todo-meta">' + bits.join('<span class="sep">|</span>') + "</div>" +
       (t.notes ? '<div class="todo-notes">' + escapeHtml(t.notes) + "</div>" : "") +
+      later +
       "</div>" +
       '<div class="todo-actions">' + action + "</div>" +
       "</div>" +
@@ -369,6 +406,56 @@
     );
   }
 
+  // Quick phrases the owner can drop into a rewrite request with one click.
+  var REWRITE_CHIPS = [
+    "Shorter.",
+    "Less formal, more like how I actually write.",
+    "More direct, lead with the ask.",
+    "Propose two or three times for a call.",
+    "Ask what the next steps and timeline are.",
+    "Decline politely and keep the door open.",
+    "Thank them and confirm the details they gave."
+  ];
+
+  // The draft block: the agent's current draft, if any, plus the owner's
+  // rewrite request. The request is an owner-only field; the agent reads it
+  // on its next run, re-reads the whole thread, rewrites the draft and clears
+  // the request. The page never calls a model itself.
+  function draftHtml(c) {
+    var req = c.draft_request && c.draft_request.instructions ? c.draft_request : null;
+    var html = '<div class="details-block details-draft">' +
+      '<div class="details-title">Draft reply' +
+      '<span class="details-actions">' +
+      (c.draft_reply ? '<button type="button" class="btn btn-small" data-action="copy-draft" data-id="' + escapeHtml(c.id) + '">Copy</button>' : "") +
+      (c.thread_url ? link(c.thread_url, "Open thread") : "") +
+      "</span></div>";
+    if (c.draft_reply) {
+      html += '<pre class="details-text">' + escapeHtml(c.draft_reply) + "</pre>" +
+        '<div class="details-note">Nothing is sent from here. Copy it, paste it into Gmail, adjust, send.</div>';
+    } else {
+      html += '<div class="details-note">No draft yet. Ask for one below and the agent writes it on its next run.</div>';
+    }
+    if (req) {
+      html += '<div class="request-state" data-id="' + escapeHtml(c.id) + '">' +
+        '<div class="request-state-title">Rewrite requested ' + escapeHtml(formatDate(req.date)) +
+        '<button type="button" class="btn btn-small btn-quiet" data-action="withdraw-rewrite" data-id="' + escapeHtml(c.id) + '">Withdraw</button></div>' +
+        '<pre class="details-text request-text">' + escapeHtml(req.instructions) + "</pre>" +
+        '<div class="details-note">The agent rewrites the draft on its next run using the whole thread, your notes and these instructions, then clears this request.</div>' +
+        "</div>";
+    } else {
+      var chips = REWRITE_CHIPS.map(function (text) {
+        return '<button type="button" class="chip" data-action="rewrite-chip" data-text="' + escapeHtml(text) + '">' + escapeHtml(text.replace(/\.$/, "")) + "</button>";
+      }).join("");
+      html += '<form class="note-form rewrite-form" data-form="rewrite" data-id="' + escapeHtml(c.id) + '">' +
+        '<div class="rewrite-label">' + (c.draft_reply ? "Not right? Tell the agent what to change." : "What should the reply do?") + "</div>" +
+        '<div class="chips">' + chips + "</div>" +
+        '<textarea name="instructions" rows="3" maxlength="2000" placeholder="Anything the thread does not say: what you want from this person, what you already agreed on a call, the tone, what to leave out. The agent reads the whole email thread plus this."></textarea>' +
+        '<button type="submit" class="btn btn-small">' + (c.draft_reply ? "Request rewrite" : "Request a draft") + "</button>" +
+        "</form>";
+    }
+    return html + "</div>";
+  }
+
   function detailsHtml(c) {
     var blocks = [];
     if (c.last_message && c.last_message.excerpt) {
@@ -381,19 +468,7 @@
         "</div>"
       );
     }
-    if (c.draft_reply) {
-      blocks.push(
-        '<div class="details-block">' +
-        '<div class="details-title">Draft reply' +
-        '<span class="details-actions">' +
-        '<button type="button" class="btn btn-small" data-action="copy-draft" data-id="' + escapeHtml(c.id) + '">Copy</button>' +
-        (c.thread_url ? link(c.thread_url, "Open thread") : "") +
-        "</span></div>" +
-        '<pre class="details-text">' + escapeHtml(c.draft_reply) + "</pre>" +
-        '<div class="details-note">Nothing is sent from here. Copy it, paste it into Gmail, adjust, send.</div>' +
-        "</div>"
-      );
-    }
+    blocks.push(draftHtml(c));
     blocks.push(planHtml(c));
     return '<tr class="details-row"><td colspan="6"><div class="details">' + blocks.join("") + "</div></td></tr>";
   }
@@ -405,7 +480,7 @@
     var nextDate = c.next_action_date ? relativeDue(c.next_action_date, "date") : null;
     var expanded = !!state.expanded[c.id];
     var detailsButton = hasDetails(c)
-      ? '<button type="button" class="btn btn-small btn-quiet details-toggle" data-action="toggle-details" data-id="' + escapeHtml(c.id) + '" aria-expanded="' + expanded + '">' + (expanded ? "Hide" : "Details") + (c.draft_reply && !expanded ? '<span class="draft-dot" title="Draft reply ready"></span>' : "") + "</button>"
+      ? '<button type="button" class="btn btn-small btn-quiet details-toggle" data-action="toggle-details" data-id="' + escapeHtml(c.id) + '" aria-expanded="' + expanded + '">' + (expanded ? "Hide" : "Details") + (c.draft_request && !expanded ? '<span class="draft-dot request-dot" title="Rewrite requested"></span>' : (c.draft_reply && !expanded ? '<span class="draft-dot" title="Draft reply ready"></span>' : "")) + "</button>"
       : "";
     var stageButton = c.stage === "closed"
       ? '<button type="button" class="btn btn-small btn-quiet" data-action="reopen-contact" data-id="' + escapeHtml(c.id) + '">Reopen</button>'
@@ -452,6 +527,7 @@
     renderMeta();
     renderTiles();
     renderTodos();
+    renderTodoContactOptions();
     renderPeople();
   }
 
@@ -594,7 +670,7 @@
   function copyContactFields(id, saved) {
     var local = state.contactsById[id];
     if (!local) return;
-    ["stage", "next_action", "next_action_date", "draft_reply", "history", "respond_on", "owner_notes", "updated_at"].forEach(function (key) {
+    ["stage", "next_action", "next_action_date", "draft_reply", "draft_request", "history", "respond_on", "owner_notes", "updated_at"].forEach(function (key) {
       if (key in saved) local[key] = saved[key];
     });
   }
@@ -710,6 +786,102 @@
     });
   }
 
+  // Owner-only rewrite request for the draft reply. The agent fulfils it on
+  // its next run and sets the field back to null.
+  function setDraftRequest(id, instructions, button) {
+    if (!requireToken(function () { setDraftRequest(id, instructions, null); })) return;
+    setBusy(button, true);
+    var withdrawing = !instructions;
+    var message = "update: " + id + (withdrawing ? " draft rewrite withdrawn" : " draft rewrite requested") + " (dashboard)";
+    saveRecord(CONTACTS_URL, "contacts", id, function (contact, today) {
+      contact.draft_request = withdrawing ? null : { date: today, instructions: instructions };
+    }, message).then(function (saved) {
+      copyContactFields(id, saved);
+      state.contactsUpdated = saved.updated_at;
+      state.live = true;
+      render();
+      toast(withdrawing ? "Rewrite request withdrawn." : "Saved. The agent rewrites this draft on its next run.");
+    }).catch(function (err) {
+      setBusy(button, false);
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  }
+
+  // Move a todo's due date: the "remind me later" action. Works on any open
+  // todo, the owner's own or the agent's.
+  function setTodoDue(id, dateStr, button) {
+    if (!requireToken(function () { setTodoDue(id, dateStr, null); })) return;
+    setBusy(button, true);
+    saveRecord(TODOS_URL, "todos", id, function (todo) {
+      todo.due = dateStr;
+    }, "update: " + id + " due " + dateStr + " (dashboard)").then(function (saved) {
+      var local = findTodo(state.todos, id);
+      if (local) { local.due = saved.due; local.updated_at = saved.updated_at; }
+      state.todosUpdated = saved.updated_at;
+      state.live = true;
+      delete state.laterOpen[id];
+      render();
+      toast("Moved " + id + " to " + formatDate(dateStr) + ".");
+    }).catch(function (err) {
+      setBusy(button, false);
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  }
+
+  // Ids for todos created on this page: todo-YYYYMMDD-xx, unique in the file.
+  function newTodoId(list, today) {
+    var base = "todo-" + today.replace(/-/g, "") + "-";
+    var taken = {};
+    list.forEach(function (t) { taken[t.id] = true; });
+    for (var n = 1; n < 1000; n++) {
+      var id = base + (n < 10 ? "0" : "") + n;
+      if (!taken[id]) return id;
+    }
+    throw new Error("Could not find a free todo id for today.");
+  }
+
+  // A todo the owner types in, not derived from mail. Marked source
+  // "dashboard" so the agent leaves it alone.
+  function addTodo(fields, button) {
+    if (!requireToken(function () { addTodo(fields, null); })) return;
+    setBusy(button, true);
+    var contact = fields.contact_id ? state.contactsById[fields.contact_id] : null;
+    var created = null;
+    saveFile(TODOS_URL, "todos", function (list, today) {
+      created = {
+        id: newTodoId(list, today),
+        title: fields.title,
+        status: "open",
+        priority: fields.priority,
+        due: fields.due || null,
+        completed: null,
+        contact_id: contact ? contact.id : null,
+        company: contact && contact.company ? contact.company : (fields.company || null),
+        notes: fields.notes || null,
+        source: "dashboard",
+        source_thread_url: contact && contact.thread_url ? contact.thread_url : null,
+        created: today,
+        updated_at: today
+      };
+      list.push(created);
+      return [created];
+    }, "update: " + "add todo " + JSON.stringify(fields.title).slice(0, 60) + " (dashboard)").then(function (changed) {
+      var saved = changed[0] || created;
+      state.todos.push(saved);
+      state.todosUpdated = saved.updated_at;
+      state.live = true;
+      el.addTodoForm.reset();
+      el.addTodoForm.hidden = true;
+      el.addTodoToggle.setAttribute("aria-expanded", "false");
+      setBusy(button, false);
+      render();
+      toast("Added " + saved.id + " and saved to GitHub.");
+    }).catch(function (err) {
+      setBusy(button, false);
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  }
+
   function openGithubDialog(message) {
     el.githubRepo.value = github.repo;
     el.githubToken.value = "";
@@ -800,8 +972,28 @@
   function onTodoListClick(event) {
     var button = event.target.closest ? event.target.closest("button[data-action]") : null;
     if (!button || button.disabled) return;
-    var status = button.getAttribute("data-action") === "done" ? "done" : "open";
-    setTodoStatus(button.getAttribute("data-id"), status, button);
+    var id = button.getAttribute("data-id");
+    var action = button.getAttribute("data-action");
+    if (action === "later") {
+      if (state.laterOpen[id]) delete state.laterOpen[id];
+      else state.laterOpen[id] = true;
+      renderTodos();
+      var input = el.todoList.querySelector('form[data-form="todo-due"][data-id="' + id + '"] input[name="due"]');
+      if (input) input.focus();
+    } else if (action === "snooze") {
+      setTodoDue(id, button.getAttribute("data-date"), button);
+    } else {
+      setTodoStatus(id, action === "done" ? "done" : "open", button);
+    }
+  }
+
+  function onTodoListSubmit(event) {
+    var form = event.target;
+    if (!form || form.getAttribute("data-form") !== "todo-due") return;
+    event.preventDefault();
+    var dateStr = form.querySelector('input[name="due"]').value.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { toast("Pick a date first.", true); return; }
+    setTodoDue(form.getAttribute("data-id"), dateStr, form.querySelector('button[type="submit"]'));
   }
 
   function copyText(text) {
@@ -832,6 +1024,15 @@
       setContactStage(id, "reopen", button);
     } else if (action === "clear-respond-on") {
       setRespondOn(id, "", button);
+    } else if (action === "withdraw-rewrite") {
+      setDraftRequest(id, "", button);
+    } else if (action === "rewrite-chip") {
+      var form = button.closest("form");
+      var area = form ? form.querySelector("textarea") : null;
+      if (!area) return;
+      var text = button.getAttribute("data-text") || "";
+      area.value = (area.value.trim() ? area.value.replace(/\s+$/, "") + " " : "") + text;
+      area.focus();
     } else if (action === "toggle-details") {
       if (state.expanded[id]) delete state.expanded[id];
       else state.expanded[id] = true;
@@ -863,7 +1064,50 @@
       var text = form.querySelector('textarea[name="note"]').value.trim();
       if (!text) { toast("Write the note first.", true); return; }
       addOwnerNote(id, text, button);
+    } else if (kind === "rewrite") {
+      var instructions = form.querySelector('textarea[name="instructions"]').value.trim();
+      if (!instructions) { toast("Say what you want changed first.", true); return; }
+      setDraftRequest(id, instructions, button);
     }
+  }
+
+  function onAddTodoToggle() {
+    var open = el.addTodoForm.hidden;
+    el.addTodoForm.hidden = !open;
+    el.addTodoToggle.setAttribute("aria-expanded", String(open));
+    if (open) el.addTodoTitle.focus();
+  }
+
+  function onAddTodoSubmit(event) {
+    event.preventDefault();
+    var title = el.addTodoTitle.value.trim();
+    if (!title) { toast("Give the todo a title first.", true); return; }
+    var due = el.addTodoDue.value.trim();
+    if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) { toast("The due date does not look right.", true); return; }
+    addTodo({
+      title: title,
+      priority: el.addTodoPriority.value || "medium",
+      due: due,
+      contact_id: el.addTodoContact.value || "",
+      notes: el.addTodoNotes.value.trim()
+    }, el.addTodoForm.querySelector('button[type="submit"]'));
+  }
+
+  // The person dropdown on the add-todo form: active people first, then
+  // closed ones, so a todo can still hang off someone who has been closed.
+  function renderTodoContactOptions() {
+    var current = el.addTodoContact.value;
+    var people = state.contacts.slice().sort(function (a, b) {
+      var ca = a.stage === "closed" ? 1 : 0, cb = b.stage === "closed" ? 1 : 0;
+      if (ca !== cb) return ca - cb;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    });
+    var html = '<option value="">No one in particular</option>' + people.map(function (c) {
+      var label = c.name + (c.company ? ", " + c.company : "") + (c.stage === "closed" ? " (closed)" : "");
+      return '<option value="' + escapeHtml(c.id) + '">' + escapeHtml(label) + "</option>";
+    }).join("");
+    el.addTodoContact.innerHTML = html;
+    el.addTodoContact.value = current;
   }
 
   function bind() {
@@ -872,12 +1116,16 @@
     el.peopleStage.addEventListener("change", renderPeople);
     el.peopleSearch.addEventListener("input", renderPeople);
     el.todoList.addEventListener("click", onTodoListClick);
+    el.todoList.addEventListener("submit", onTodoListSubmit);
     el.peopleBody.addEventListener("click", onPeopleClick);
     el.peopleBody.addEventListener("submit", onPeopleSubmit);
     el.githubConnect.addEventListener("click", function () { openGithubDialog(""); });
     el.githubForm.addEventListener("submit", onGithubSave);
     el.githubCancel.addEventListener("click", function () { pendingAction = null; closeGithubDialog(); });
     el.githubDisconnect.addEventListener("click", onGithubDisconnect);
+    el.addTodoToggle.addEventListener("click", onAddTodoToggle);
+    el.addTodoForm.addEventListener("submit", onAddTodoSubmit);
+    el.addTodoCancel.addEventListener("click", function () { el.addTodoForm.reset(); onAddTodoToggle(); });
     var tiles = document.querySelectorAll(".tile[data-tile]");
     for (var i = 0; i < tiles.length; i++) tiles[i].addEventListener("click", onTileClick);
   }
@@ -909,6 +1157,14 @@
     el.githubError = byId("github-error");
     el.githubCancel = byId("github-cancel");
     el.githubDisconnect = byId("github-disconnect");
+    el.addTodoToggle = byId("add-todo-toggle");
+    el.addTodoForm = byId("add-todo-form");
+    el.addTodoTitle = byId("add-todo-title");
+    el.addTodoPriority = byId("add-todo-priority");
+    el.addTodoDue = byId("add-todo-due");
+    el.addTodoContact = byId("add-todo-contact");
+    el.addTodoNotes = byId("add-todo-notes");
+    el.addTodoCancel = byId("add-todo-cancel");
     loadGithubSettings();
     renderGithubState();
     bind();

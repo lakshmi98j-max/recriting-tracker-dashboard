@@ -9,7 +9,7 @@
   <meta name="tracker-repo" content="lakshmi98j-max/recriting-tracker-2">
   <meta name="tracker-branch" content="main">
   <title>Recruiting Tracker</title>
-  <link rel="stylesheet" href="assets/style.css?v=202609251936">
+  <link rel="stylesheet" href="assets/style.css?v=202610251900">
 </head>
 <body>
   <header class="topbar">
@@ -66,8 +66,35 @@
               <option value="low">Low</option>
             </select>
           </label>
+          <button class="btn btn-small" type="button" id="add-todo-toggle" aria-expanded="false" aria-controls="add-todo-form">Add todo</button>
         </div>
       </div>
+      <form id="add-todo-form" class="add-todo-form" hidden novalidate>
+        <label class="grow">Title
+          <input type="text" id="add-todo-title" maxlength="200" placeholder="Something you need to do that did not come from an email" autocomplete="off" required>
+        </label>
+        <label>Priority
+          <select id="add-todo-priority">
+            <option value="high">High</option>
+            <option value="medium" selected>Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+        <label>Due
+          <input type="date" id="add-todo-due">
+        </label>
+        <label class="grow">Person
+          <select id="add-todo-contact"><option value="">No one in particular</option></select>
+        </label>
+        <label class="full">Notes
+          <textarea id="add-todo-notes" rows="2" maxlength="1000" placeholder="Optional"></textarea>
+        </label>
+        <div class="add-todo-actions">
+          <button type="button" class="btn btn-small btn-quiet" id="add-todo-cancel">Cancel</button>
+          <button type="submit" class="btn btn-small btn-primary">Add todo</button>
+        </div>
+        <p class="details-note full">Saved as a commit to the data repo, marked as yours. The agent reads it but never changes or closes it.</p>
+      </form>
       <ul id="todo-list" class="todo-list"></ul>
       <p id="todo-empty" class="empty" hidden>No todos match these filters.</p>
     </section>
@@ -143,6 +170,6 @@
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="assets/app.js?v=202609251936"></script>
+  <script src="assets/app.js?v=202610251900"></script>
 </body>
 </html>

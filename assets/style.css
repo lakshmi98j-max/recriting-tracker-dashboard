@@ -599,6 +599,171 @@ tbody tr.details-row:hover td {
   color: var(--muted);
 }
 
+/* Draft rewrite request */
+
+.rewrite-form {
+  margin-top: 10px;
+}
+
+.rewrite-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--muted);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--focus, var(--medium));
+  outline-offset: 1px;
+}
+
+.request-state {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.request-state-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--medium);
+  margin-bottom: 6px;
+}
+
+.request-text {
+  white-space: pre-wrap;
+}
+
+.request-dot {
+  background: var(--medium);
+}
+
+/* Todo: remind me later */
+
+.later-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.later-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.later-row input[type="date"] {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 3px 8px;
+}
+
+/* Add todo */
+
+.add-todo-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+  margin: 0 0 14px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.add-todo-form[hidden] {
+  display: none;
+}
+
+.add-todo-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 140px;
+}
+
+.add-todo-form label.grow {
+  flex: 1 1 220px;
+}
+
+.add-todo-form label.full,
+.add-todo-form .full {
+  flex-basis: 100%;
+}
+
+.add-todo-form input,
+.add-todo-form select,
+.add-todo-form textarea {
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.add-todo-form textarea {
+  resize: vertical;
+}
+
+.add-todo-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.add-todo-form .details-note {
+  margin: 0;
+}
+
+.own-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* Owner's plan and notes */
 
 .plan-form {
