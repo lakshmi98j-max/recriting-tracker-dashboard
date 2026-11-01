@@ -618,8 +618,9 @@
 
   // Read a data file from the repo, let mutateList change it, write it back
   // as a commit. mutateList(list, today) returns the records it changed; an
-  // empty result means nothing is written. Retries once when the file changed
-  // under us (409 or 422).
+  // empty result means nothing is written. message is the commit message, or
+  // a function of (changed, today) when it needs an id chosen during the
+  // write. Retries once when the file changed under us (409 or 422).
   function saveFile(filePath, listKey, mutateList, message) {
     var path = "/repos/" + github.repo + "/contents/" + filePath;
     var today = todayIso();
@@ -635,7 +636,7 @@
         changed.forEach(function (record) { record.updated_at = today; });
         if (!Array.isArray(data)) data.updated_at = today;
         var body = {
-          message: message,
+          message: typeof message === "function" ? message(changed, today) : message,
           content: utf8ToBase64(JSON.stringify(data, null, 2) + "\n"),
           sha: file.sha,
           branch: github.branch
@@ -828,16 +829,17 @@
     });
   }
 
-  // Ids for todos created on this page: todo-YYYYMMDD-xx, unique in the file.
-  function newTodoId(list, today) {
-    var base = "todo-" + today.replace(/-/g, "") + "-";
-    var taken = {};
-    list.forEach(function (t) { taken[t.id] = true; });
-    for (var n = 1; n < 1000; n++) {
-      var id = base + (n < 10 ? "0" : "") + n;
-      if (!taken[id]) return id;
-    }
-    throw new Error("Could not find a free todo id for today.");
+  // Ids follow the schema in CLAUDE.md: t_ plus four digits, max existing
+  // plus one, never reused.
+  function newTodoId(list) {
+    var max = 0;
+    list.forEach(function (t) {
+      var m = /^t_(\d{4})$/.exec(String(t.id || ""));
+      if (m && parseInt(m[1], 10) > max) max = parseInt(m[1], 10);
+    });
+    var next = String(max + 1);
+    while (next.length < 4) next = "0" + next;
+    return "t_" + next;
   }
 
   // A todo the owner types in, not derived from mail. Marked source
@@ -849,7 +851,7 @@
     var created = null;
     saveFile(TODOS_URL, "todos", function (list, today) {
       created = {
-        id: newTodoId(list, today),
+        id: newTodoId(list),
         title: fields.title,
         status: "open",
         priority: fields.priority,
@@ -865,7 +867,7 @@
       };
       list.push(created);
       return [created];
-    }, "update: " + "add todo " + JSON.stringify(fields.title).slice(0, 60) + " (dashboard)").then(function (changed) {
+    }, function (changed) { return "update: " + changed[0].id + " added (dashboard)"; }).then(function (changed) {
       var saved = changed[0] || created;
       state.todos.push(saved);
       state.todosUpdated = saved.updated_at;
