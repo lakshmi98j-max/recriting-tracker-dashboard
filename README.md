@@ -17,6 +17,7 @@ A job search is dozens of email threads at once: recruiters, coffee chats, refer
 
 ## What the dashboard does
 
+- Two tabs. Recruiting holds everything below. Other todos is a separate list of what the agent finds in the rest of my mail: bills, school deadlines, forms, appointments, each linked to its email, with its own tiles, category filter and the same buttons. Recruiting mail never lands there.
 - Four tiles: open todos, high priority, follow-ups needed, awaiting my reply. Each one filters the lists below.
 - A todo list with status and priority filters. Mark done and Reopen commit the change straight to the data repo. Later moves a todo's due date with one click (tomorrow, 3 days, next Monday, a week, or any date).
 - Add todo, for things that did not come from an email. These are marked as mine; the agent reads them and may remind me about them but never changes or closes them.

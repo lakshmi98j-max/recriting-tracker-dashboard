@@ -10,6 +10,18 @@
 
   var CONTACTS_URL = "data/contacts.json";
   var TODOS_URL = "data/todos.json";
+  var OTHER_URL = "data/other_todos.json";
+
+  // The two todo lists: recruiting (linked to people) and everything else the
+  // agent finds in the mail. Separate files, separate id prefixes.
+  var KINDS = {
+    recruiting: { name: "recruiting", url: TODOS_URL, prefix: "t_", stateKey: "todos", updatedKey: "todosUpdated" },
+    other: { name: "other", url: OTHER_URL, prefix: "o_", stateKey: "other", updatedKey: "otherUpdated" }
+  };
+  var OTHER_CATEGORIES = ["school", "finance", "admin", "health", "housing", "personal", "other"];
+  var CATEGORY_LABELS = {
+    school: "School", finance: "Money", admin: "Admin", health: "Health", housing: "Housing", personal: "Personal", other: "Other"
+  };
   var MS_PER_DAY = 86400000;
 
   // The Mark done / Reopen buttons commit data/todos.json through the GitHub
@@ -32,9 +44,13 @@
   var state = {
     contacts: [],
     todos: [],
+    other: [],
+    otherMissing: false,
     contactsById: {},
     contactsUpdated: null,
     todosUpdated: null,
+    otherUpdated: null,
+    tab: "recruiting",
     live: false,
     expanded: {},
     laterOpen: {}
@@ -210,7 +226,11 @@
     // serves a data file for up to 10 minutes after a commit.
     var busted = url + (url.indexOf("?") === -1 ? "?" : "&") + "v=" + Date.now();
     return fetch(busted, { cache: "no-store" }).then(function (res) {
-      if (!res.ok) throw new Error(url + " returned HTTP " + res.status);
+      if (!res.ok) {
+        var err = new Error(url + " returned HTTP " + res.status);
+        err.status = res.status;
+        throw err;
+      }
       return res.json();
     });
   }
@@ -225,18 +245,27 @@
       });
   }
 
+  // The other-todos file is newer than the rest of the tracker and may not
+  // exist yet; a missing file means an empty list, not a broken page.
+  function optional(promise) {
+    return promise.then(function (payload) { return payload; }, function (err) {
+      if (err && (err.status === 404 || /HTTP 404/.test(err.message || ""))) return { missing: true, todos: [] };
+      throw err;
+    });
+  }
+
   function loadData() {
     if (github.token && github.repo) {
-      return Promise.all([loadFromGithub(CONTACTS_URL), loadFromGithub(TODOS_URL)]).then(function (results) {
+      return Promise.all([loadFromGithub(CONTACTS_URL), loadFromGithub(TODOS_URL), optional(loadFromGithub(OTHER_URL))]).then(function (results) {
         return { results: results, live: true };
       }, function (err) {
         // Fall back to the published copy so a bad token never blanks the page.
-        return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL)]).then(function (results) {
+        return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL), optional(loadJson(OTHER_URL))]).then(function (results) {
           return { results: results, live: false, warning: err && err.message ? err.message : String(err) };
         });
       });
     }
-    return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL)]).then(function (results) {
+    return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL), optional(loadJson(OTHER_URL))]).then(function (results) {
       return { results: results, live: false };
     });
   }
@@ -271,7 +300,7 @@
 
   function renderMeta() {
     var parts = [];
-    parts.push(plural(state.contacts.length, "contact") + ", " + plural(state.todos.length, "todo"));
+    parts.push(plural(state.contacts.length, "contact") + ", " + plural(state.todos.length, "recruiting todo") + ", " + plural(state.other.length, "other todo"));
     if (state.contactsUpdated) parts.push("contacts updated " + state.contactsUpdated);
     if (state.todosUpdated) parts.push("todos updated " + state.todosUpdated);
     parts.push(state.live ? "live from GitHub" : "published copy");
@@ -302,8 +331,9 @@
     return String(a.id).localeCompare(String(b.id));
   }
 
-  function todoHtml(t) {
-    var contact = t.contact_id ? state.contactsById[t.contact_id] : null;
+  function todoHtml(t, kind) {
+    var isOther = kind.name === "other";
+    var contact = !isOther && t.contact_id ? state.contactsById[t.contact_id] : null;
     var due;
     if (t.status === "done") {
       due = { text: t.completed ? "done " + formatDate(t.completed) : "done", cls: "done" };
@@ -313,7 +343,9 @@
     var bits = [];
     bits.push('<span class="pill priority-' + escapeHtml(t.priority) + '">' + escapeHtml(t.priority) + "</span>");
     bits.push('<span class="due ' + due.cls + '">' + escapeHtml(due.text) + "</span>");
-    if (t.company) bits.push("<span>" + escapeHtml(t.company) + "</span>");
+    if (isOther && t.category) bits.push('<span class="pill cat">' + escapeHtml(CATEGORY_LABELS[t.category] || t.category) + "</span>");
+    if (isOther && t.sender) bits.push("<span>" + escapeHtml(t.sender) + "</span>");
+    if (!isOther && t.company) bits.push("<span>" + escapeHtml(t.company) + "</span>");
     if (contact) bits.push("<span>" + escapeHtml(contact.name) + "</span>");
     if (t.source_thread_url) bits.push(link(t.source_thread_url, "Gmail thread"));
     if (t.source === "dashboard") bits.push('<span class="own-tag" title="Added by you on this page; the agent never changes it">mine</span>');
@@ -358,8 +390,66 @@
       return true;
     }).sort(todoSort);
     el.todoCount.textContent = rows.length + " of " + state.todos.length;
-    el.todoList.innerHTML = rows.map(todoHtml).join("");
+    el.todoList.innerHTML = rows.map(function (t) { return todoHtml(t, KINDS.recruiting); }).join("");
     el.todoEmpty.hidden = rows.length > 0;
+  }
+
+  // Due within the next 7 days, today included.
+  function isDueThisWeek(t) {
+    var n = daysFromToday(t.due);
+    return n !== null && n >= 0 && n <= 7;
+  }
+
+  function isOverdue(t) {
+    var n = daysFromToday(t.due);
+    return n !== null && n < 0;
+  }
+
+  function renderOtherTiles() {
+    var open = state.other.filter(function (t) { return t.status === "open"; });
+    byId("tile-other-open").textContent = open.length;
+    byId("tile-other-overdue").textContent = open.filter(isOverdue).length;
+    byId("tile-other-week").textContent = open.filter(isDueThisWeek).length;
+    byId("tile-other-high").textContent = open.filter(function (t) { return t.priority === "high"; }).length;
+    el.otherOpenCount.textContent = open.length;
+    el.otherOpenCount.hidden = open.length === 0;
+  }
+
+  function renderOtherCategoryOptions() {
+    var inUse = {};
+    state.other.forEach(function (t) { if (t.category) inUse[t.category] = true; });
+    var all = OTHER_CATEGORIES.slice();
+    Object.keys(inUse).forEach(function (c) { if (all.indexOf(c) === -1) all.push(c); });
+    var current = el.otherCategory.value || "all";
+    el.otherCategory.innerHTML = '<option value="all">All</option>' + all.map(function (c) {
+      return '<option value="' + escapeHtml(c) + '">' + escapeHtml(CATEGORY_LABELS[c] || c) + "</option>";
+    }).join("");
+    el.otherCategory.value = all.indexOf(current) !== -1 || current === "all" ? current : "all";
+    var chosen = el.addOtherCategory.value;
+    el.addOtherCategory.innerHTML = OTHER_CATEGORIES.map(function (c) {
+      return '<option value="' + escapeHtml(c) + '"' + (c === "other" && !chosen ? " selected" : "") + ">" + escapeHtml(CATEGORY_LABELS[c] || c) + "</option>";
+    }).join("");
+    if (chosen) el.addOtherCategory.value = chosen;
+  }
+
+  function renderOther() {
+    var status = el.otherStatus.value;
+    var priority = el.otherPriority.value;
+    var category = el.otherCategory.value;
+    var filter = state.otherFilter || null;
+    var rows = state.other.filter(function (t) {
+      if (status !== "all" && t.status !== status) return false;
+      if (priority !== "all" && t.priority !== priority) return false;
+      if (category !== "all" && t.category !== category) return false;
+      if (filter === "overdue" && !isOverdue(t)) return false;
+      if (filter === "week" && !isDueThisWeek(t)) return false;
+      return true;
+    }).sort(todoSort);
+    el.otherCount.textContent = rows.length + " of " + state.other.length + (filter ? (filter === "overdue" ? ", overdue only" : ", due this week only") : "");
+    el.otherList.innerHTML = rows.map(function (t) { return todoHtml(t, KINDS.other); }).join("");
+    el.otherEmpty.hidden = rows.length > 0 || state.otherMissing;
+    el.otherMissing.hidden = !state.otherMissing;
+    renderOtherTiles();
   }
 
   function peopleSort(a, b) {
@@ -528,7 +618,34 @@
     renderTiles();
     renderTodos();
     renderTodoContactOptions();
+    renderOtherCategoryOptions();
+    renderOther();
     renderPeople();
+  }
+
+  // ------------------------------------------------------------------
+  // Tabs
+  // ------------------------------------------------------------------
+
+  function setTab(name, pushHash) {
+    if (!KINDS[name]) name = "recruiting";
+    state.tab = name;
+    el.tabs.forEach(function (tab) {
+      var active = tab.getAttribute("data-tab") === name;
+      tab.setAttribute("aria-selected", String(active));
+    });
+    el.viewRecruiting.hidden = name !== "recruiting";
+    el.viewOther.hidden = name !== "other";
+    if (pushHash !== false) {
+      var hash = name === "other" ? "#other" : "";
+      if (window.location.hash !== hash) {
+        try { history.replaceState(null, "", window.location.pathname + window.location.search + hash); } catch (e) { /* ignore */ }
+      }
+    }
+  }
+
+  function tabFromHash() {
+    return window.location.hash === "#other" ? "other" : "recruiting";
   }
 
   // ------------------------------------------------------------------
@@ -676,20 +793,20 @@
     });
   }
 
-  function setTodoStatus(id, status, button) {
-    if (!requireToken(function () { setTodoStatus(id, status, el.todoList.querySelector('button[data-id="' + id + '"]')); })) return;
+  function setTodoStatus(kind, id, status, button) {
+    if (!requireToken(function () { setTodoStatus(kind, id, status, null); })) return;
     setBusy(button, true);
-    saveRecord(TODOS_URL, "todos", id, function (todo, today) {
+    saveRecord(kind.url, "todos", id, function (todo, today) {
       todo.status = status;
       todo.completed = status === "done" ? today : null;
     }, "update: " + id + (status === "done" ? " done" : " reopened") + " (dashboard)").then(function (saved) {
-      var local = findTodo(state.todos, id);
+      var local = findTodo(state[kind.stateKey], id);
       if (local) {
         local.status = saved.status;
         local.completed = saved.completed;
         local.updated_at = saved.updated_at;
       }
-      state.todosUpdated = saved.updated_at;
+      state[kind.updatedKey] = saved.updated_at;
       state.live = true;
       render();
       toast("Saved " + id + " to GitHub.");
@@ -809,16 +926,16 @@
   }
 
   // Move a todo's due date: the "remind me later" action. Works on any open
-  // todo, the owner's own or the agent's.
-  function setTodoDue(id, dateStr, button) {
-    if (!requireToken(function () { setTodoDue(id, dateStr, null); })) return;
+  // todo in either list, the owner's own or the agent's.
+  function setTodoDue(kind, id, dateStr, button) {
+    if (!requireToken(function () { setTodoDue(kind, id, dateStr, null); })) return;
     setBusy(button, true);
-    saveRecord(TODOS_URL, "todos", id, function (todo) {
+    saveRecord(kind.url, "todos", id, function (todo) {
       todo.due = dateStr;
     }, "update: " + id + " due " + dateStr + " (dashboard)").then(function (saved) {
-      var local = findTodo(state.todos, id);
+      var local = findTodo(state[kind.stateKey], id);
       if (local) { local.due = saved.due; local.updated_at = saved.updated_at; }
-      state.todosUpdated = saved.updated_at;
+      state[kind.updatedKey] = saved.updated_at;
       state.live = true;
       delete state.laterOpen[id];
       render();
@@ -829,52 +946,70 @@
     });
   }
 
-  // Ids follow the schema in CLAUDE.md: t_ plus four digits, max existing
-  // plus one, never reused.
-  function newTodoId(list) {
+  // Ids follow the schema in CLAUDE.md: the list's prefix plus four digits,
+  // max existing plus one, never reused.
+  function newTodoId(list, prefix) {
     var max = 0;
+    var re = new RegExp("^" + prefix + "(\\d{4})$");
     list.forEach(function (t) {
-      var m = /^t_(\d{4})$/.exec(String(t.id || ""));
+      var m = re.exec(String(t.id || ""));
       if (m && parseInt(m[1], 10) > max) max = parseInt(m[1], 10);
     });
     var next = String(max + 1);
     while (next.length < 4) next = "0" + next;
-    return "t_" + next;
+    return prefix + next;
   }
 
   // A todo the owner types in, not derived from mail. Marked source
   // "dashboard" so the agent leaves it alone.
-  function addTodo(fields, button) {
-    if (!requireToken(function () { addTodo(fields, null); })) return;
+  function addTodo(kind, fields, form, button) {
+    if (!requireToken(function () { addTodo(kind, fields, form, null); })) return;
     setBusy(button, true);
-    var contact = fields.contact_id ? state.contactsById[fields.contact_id] : null;
+    var contact = kind.name === "recruiting" && fields.contact_id ? state.contactsById[fields.contact_id] : null;
     var created = null;
-    saveFile(TODOS_URL, "todos", function (list, today) {
-      created = {
-        id: newTodoId(list),
-        title: fields.title,
-        status: "open",
-        priority: fields.priority,
-        due: fields.due || null,
-        completed: null,
-        contact_id: contact ? contact.id : null,
-        company: contact && contact.company ? contact.company : (fields.company || null),
-        notes: fields.notes || null,
-        source: "dashboard",
-        source_thread_url: contact && contact.thread_url ? contact.thread_url : null,
-        created: today,
-        updated_at: today
-      };
+    saveFile(kind.url, "todos", function (list, today) {
+      created = kind.name === "other"
+        ? {
+          id: newTodoId(list, kind.prefix),
+          title: fields.title,
+          priority: fields.priority,
+          status: "open",
+          due: fields.due || null,
+          sender: null,
+          category: fields.category || "other",
+          source: "dashboard",
+          source_thread_url: null,
+          created: today,
+          completed: null,
+          notes: fields.notes || null,
+          updated_at: today
+        }
+        : {
+          id: newTodoId(list, kind.prefix),
+          title: fields.title,
+          priority: fields.priority,
+          status: "open",
+          due: fields.due || null,
+          contact_id: contact ? contact.id : null,
+          company: contact && contact.company ? contact.company : null,
+          source_thread_url: contact && contact.thread_url ? contact.thread_url : null,
+          created: today,
+          completed: null,
+          notes: fields.notes || null,
+          source: "dashboard",
+          updated_at: today
+        };
       list.push(created);
       return [created];
     }, function (changed) { return "update: " + changed[0].id + " added (dashboard)"; }).then(function (changed) {
       var saved = changed[0] || created;
-      state.todos.push(saved);
-      state.todosUpdated = saved.updated_at;
+      state[kind.stateKey].push(saved);
+      state[kind.updatedKey] = saved.updated_at;
       state.live = true;
-      el.addTodoForm.reset();
-      el.addTodoForm.hidden = true;
-      el.addTodoToggle.setAttribute("aria-expanded", "false");
+      form.reset();
+      form.hidden = true;
+      var toggle = document.querySelector('[data-action="toggle-add"][aria-controls="' + form.id + '"]');
+      if (toggle) toggle.setAttribute("aria-expanded", "false");
       setBusy(button, false);
       render();
       toast("Added " + saved.id + " and saved to GitHub.");
@@ -950,6 +1085,14 @@
 
   function onTileClick(event) {
     var tile = event.currentTarget.getAttribute("data-tile");
+    if (tile.indexOf("other-") === 0) {
+      el.otherStatus.value = "open";
+      el.otherPriority.value = tile === "other-high" ? "high" : "all";
+      state.otherFilter = tile === "other-overdue" ? "overdue" : tile === "other-week" ? "week" : null;
+      renderOther();
+      byId("other-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
     if (tile === "open") {
       el.todoStatus.value = "open";
       el.todoPriority.value = "all";
@@ -971,21 +1114,26 @@
     }
   }
 
+  function kindOfList(list) {
+    return KINDS[list.getAttribute("data-kind")] || KINDS.recruiting;
+  }
+
   function onTodoListClick(event) {
     var button = event.target.closest ? event.target.closest("button[data-action]") : null;
     if (!button || button.disabled) return;
+    var kind = kindOfList(event.currentTarget);
     var id = button.getAttribute("data-id");
     var action = button.getAttribute("data-action");
     if (action === "later") {
       if (state.laterOpen[id]) delete state.laterOpen[id];
       else state.laterOpen[id] = true;
-      renderTodos();
-      var input = el.todoList.querySelector('form[data-form="todo-due"][data-id="' + id + '"] input[name="due"]');
+      if (kind.name === "other") renderOther(); else renderTodos();
+      var input = event.currentTarget.querySelector('form[data-form="todo-due"][data-id="' + id + '"] input[name="due"]');
       if (input) input.focus();
     } else if (action === "snooze") {
-      setTodoDue(id, button.getAttribute("data-date"), button);
+      setTodoDue(kind, id, button.getAttribute("data-date"), button);
     } else {
-      setTodoStatus(id, action === "done" ? "done" : "open", button);
+      setTodoStatus(kind, id, action === "done" ? "done" : "open", button);
     }
   }
 
@@ -995,7 +1143,7 @@
     event.preventDefault();
     var dateStr = form.querySelector('input[name="due"]').value.trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { toast("Pick a date first.", true); return; }
-    setTodoDue(form.getAttribute("data-id"), dateStr, form.querySelector('button[type="submit"]'));
+    setTodoDue(kindOfList(event.currentTarget), form.getAttribute("data-id"), dateStr, form.querySelector('button[type="submit"]'));
   }
 
   function copyText(text) {
@@ -1073,26 +1221,48 @@
     }
   }
 
-  function onAddTodoToggle() {
-    var open = el.addTodoForm.hidden;
-    el.addTodoForm.hidden = !open;
-    el.addTodoToggle.setAttribute("aria-expanded", String(open));
-    if (open) el.addTodoTitle.focus();
+  // Add-todo forms: one per tab, told apart by data-kind. The toggle button
+  // names its form in aria-controls; Cancel sits inside the form.
+  function onAddControls(event) {
+    var button = event.target.closest ? event.target.closest('button[data-action="toggle-add"], button[data-action="cancel-add"]') : null;
+    if (!button) return;
+    var form = button.getAttribute("data-action") === "toggle-add"
+      ? byId(button.getAttribute("aria-controls"))
+      : button.closest("form");
+    if (!form) return;
+    var toggle = document.querySelector('[data-action="toggle-add"][aria-controls="' + form.id + '"]');
+    var open = form.hidden;
+    if (button.getAttribute("data-action") === "cancel-add") { form.reset(); open = false; }
+    form.hidden = !open;
+    if (toggle) toggle.setAttribute("aria-expanded", String(open));
+    if (open) {
+      var first = form.querySelector('input[name="title"]');
+      if (first) first.focus();
+    }
   }
 
-  function onAddTodoSubmit(event) {
+  function onAddSubmit(event) {
+    var form = event.target;
+    if (!form || !form.classList.contains("add-todo-form")) return;
     event.preventDefault();
-    var title = el.addTodoTitle.value.trim();
+    var kind = KINDS[form.getAttribute("data-kind")] || KINDS.recruiting;
+    var f = form.elements;
+    var title = (f.title.value || "").trim();
     if (!title) { toast("Give the todo a title first.", true); return; }
-    var due = el.addTodoDue.value.trim();
+    var due = (f.due.value || "").trim();
     if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) { toast("The due date does not look right.", true); return; }
-    addTodo({
+    if (kind.name === "other" && state.otherMissing) {
+      toast("The data repo has no data/other_todos.json yet, so there is nowhere to save this. Pull the latest tooling first.", true);
+      return;
+    }
+    addTodo(kind, {
       title: title,
-      priority: el.addTodoPriority.value || "medium",
+      priority: f.priority.value || "medium",
       due: due,
-      contact_id: el.addTodoContact.value || "",
-      notes: el.addTodoNotes.value.trim()
-    }, el.addTodoForm.querySelector('button[type="submit"]'));
+      contact_id: f.contact_id ? f.contact_id.value : "",
+      category: f.category ? f.category.value : "",
+      notes: (f.notes.value || "").trim()
+    }, form, form.querySelector('button[type="submit"]'));
   }
 
   // The person dropdown on the add-todo form: active people first, then
@@ -1119,15 +1289,24 @@
     el.peopleSearch.addEventListener("input", renderPeople);
     el.todoList.addEventListener("click", onTodoListClick);
     el.todoList.addEventListener("submit", onTodoListSubmit);
+    el.otherList.addEventListener("click", onTodoListClick);
+    el.otherList.addEventListener("submit", onTodoListSubmit);
+    el.otherStatus.addEventListener("change", function () { state.otherFilter = null; renderOther(); });
+    el.otherPriority.addEventListener("change", function () { state.otherFilter = null; renderOther(); });
+    el.otherCategory.addEventListener("change", function () { state.otherFilter = null; renderOther(); });
+    el.tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () { setTab(tab.getAttribute("data-tab")); });
+    });
+    window.addEventListener("hashchange", function () { setTab(tabFromHash(), false); });
     el.peopleBody.addEventListener("click", onPeopleClick);
     el.peopleBody.addEventListener("submit", onPeopleSubmit);
     el.githubConnect.addEventListener("click", function () { openGithubDialog(""); });
     el.githubForm.addEventListener("submit", onGithubSave);
     el.githubCancel.addEventListener("click", function () { pendingAction = null; closeGithubDialog(); });
     el.githubDisconnect.addEventListener("click", onGithubDisconnect);
-    el.addTodoToggle.addEventListener("click", onAddTodoToggle);
-    el.addTodoForm.addEventListener("submit", onAddTodoSubmit);
-    el.addTodoCancel.addEventListener("click", function () { el.addTodoForm.reset(); onAddTodoToggle(); });
+    document.addEventListener("click", onAddControls);
+    el.addTodoForm.addEventListener("submit", onAddSubmit);
+    el.addOtherForm.addEventListener("submit", onAddSubmit);
     var tiles = document.querySelectorAll(".tile[data-tile]");
     for (var i = 0; i < tiles.length; i++) tiles[i].addEventListener("click", onTileClick);
   }
@@ -1159,15 +1338,23 @@
     el.githubError = byId("github-error");
     el.githubCancel = byId("github-cancel");
     el.githubDisconnect = byId("github-disconnect");
-    el.addTodoToggle = byId("add-todo-toggle");
     el.addTodoForm = byId("add-todo-form");
-    el.addTodoTitle = byId("add-todo-title");
-    el.addTodoPriority = byId("add-todo-priority");
-    el.addTodoDue = byId("add-todo-due");
     el.addTodoContact = byId("add-todo-contact");
-    el.addTodoNotes = byId("add-todo-notes");
-    el.addTodoCancel = byId("add-todo-cancel");
+    el.addOtherForm = byId("add-other-form");
+    el.addOtherCategory = byId("add-other-category");
+    el.otherList = byId("other-list");
+    el.otherEmpty = byId("other-empty");
+    el.otherMissing = byId("other-missing");
+    el.otherCount = byId("other-count");
+    el.otherStatus = byId("other-status");
+    el.otherPriority = byId("other-priority");
+    el.otherCategory = byId("other-category");
+    el.otherOpenCount = byId("other-open-count");
+    el.viewRecruiting = byId("view-recruiting");
+    el.viewOther = byId("view-other");
+    el.tabs = Array.prototype.slice.call(document.querySelectorAll(".tab[data-tab]"));
     loadGithubSettings();
+    setTab(tabFromHash(), false);
     renderGithubState();
     bind();
     loadAndRender();
@@ -1178,10 +1365,14 @@
       .then(function (loaded) {
         var contacts = unwrap(loaded.results[0], "contacts");
         var todos = unwrap(loaded.results[1], "todos");
+        var other = unwrap(loaded.results[2], "todos");
         state.contacts = contacts.rows;
         state.todos = todos.rows;
+        state.other = other.rows;
+        state.otherMissing = !!(loaded.results[2] && loaded.results[2].missing);
         state.contactsUpdated = contacts.updated;
         state.todosUpdated = todos.updated;
+        state.otherUpdated = other.updated;
         state.live = loaded.live;
         state.contactsById = {};
         state.contacts.forEach(function (c) { state.contactsById[c.id] = c; });

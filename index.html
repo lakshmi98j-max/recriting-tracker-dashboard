@@ -9,7 +9,7 @@
   <meta name="tracker-repo" content="lakshmi98j-max/recriting-tracker-2">
   <meta name="tracker-branch" content="main">
   <title>Recruiting Tracker</title>
-  <link rel="stylesheet" href="assets/style.css?v=202610251900">
+  <link rel="stylesheet" href="assets/style.css?v=202611041200">
 </head>
 <body>
   <header class="topbar">
@@ -27,6 +27,13 @@
 
   <main class="wrap">
     <div id="error" class="error" role="alert" hidden></div>
+
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" type="button" role="tab" id="tab-recruiting" data-tab="recruiting" aria-selected="true" aria-controls="view-recruiting">Recruiting</button>
+      <button class="tab" type="button" role="tab" id="tab-other" data-tab="other" aria-selected="false" aria-controls="view-other">Other todos <span class="tab-count" id="other-open-count" hidden></span></button>
+    </nav>
+
+    <div id="view-recruiting" class="view" role="tabpanel" aria-labelledby="tab-recruiting">
 
     <section class="tiles" aria-label="Summary">
       <button class="tile" type="button" data-tile="open" title="Show open todos">
@@ -66,36 +73,36 @@
               <option value="low">Low</option>
             </select>
           </label>
-          <button class="btn btn-small" type="button" id="add-todo-toggle" aria-expanded="false" aria-controls="add-todo-form">Add todo</button>
+          <button class="btn btn-small" type="button" id="add-todo-toggle" data-action="toggle-add" aria-expanded="false" aria-controls="add-todo-form">Add todo</button>
         </div>
       </div>
-      <form id="add-todo-form" class="add-todo-form" hidden novalidate>
+      <form id="add-todo-form" class="add-todo-form" data-kind="recruiting" hidden novalidate>
         <label class="grow">Title
-          <input type="text" id="add-todo-title" maxlength="200" placeholder="Something you need to do that did not come from an email" autocomplete="off" required>
+          <input type="text" id="add-todo-title" name="title" maxlength="200" placeholder="Something you need to do that did not come from an email" autocomplete="off" required>
         </label>
         <label>Priority
-          <select id="add-todo-priority">
+          <select id="add-todo-priority" name="priority">
             <option value="high">High</option>
             <option value="medium" selected>Medium</option>
             <option value="low">Low</option>
           </select>
         </label>
         <label>Due
-          <input type="date" id="add-todo-due">
+          <input type="date" id="add-todo-due" name="due">
         </label>
         <label class="grow">Person
-          <select id="add-todo-contact"><option value="">No one in particular</option></select>
+          <select id="add-todo-contact" name="contact_id"><option value="">No one in particular</option></select>
         </label>
         <label class="full">Notes
-          <textarea id="add-todo-notes" rows="2" maxlength="1000" placeholder="Optional"></textarea>
+          <textarea id="add-todo-notes" name="notes" rows="2" maxlength="1000" placeholder="Optional"></textarea>
         </label>
         <div class="add-todo-actions">
-          <button type="button" class="btn btn-small btn-quiet" id="add-todo-cancel">Cancel</button>
+          <button type="button" class="btn btn-small btn-quiet" id="add-todo-cancel" data-action="cancel-add">Cancel</button>
           <button type="submit" class="btn btn-small btn-primary">Add todo</button>
         </div>
         <p class="details-note full">Saved as a commit to the data repo, marked as yours. The agent reads it but never changes or closes it.</p>
       </form>
-      <ul id="todo-list" class="todo-list"></ul>
+      <ul id="todo-list" class="todo-list" data-kind="recruiting"></ul>
       <p id="todo-empty" class="empty" hidden>No todos match these filters.</p>
     </section>
 
@@ -138,10 +145,91 @@
       </div>
       <p id="people-empty" class="empty" hidden>No contacts match these filters.</p>
     </section>
+    </div>
+
+    <div id="view-other" class="view" role="tabpanel" aria-labelledby="tab-other" hidden>
+      <section class="tiles" aria-label="Other todos summary">
+        <button class="tile" type="button" data-tile="other-open" title="Show open other todos">
+          <span class="tile-value" id="tile-other-open">0</span>
+          <span class="tile-label">Open</span>
+        </button>
+        <button class="tile tile-high" type="button" data-tile="other-overdue" title="Show overdue other todos">
+          <span class="tile-value" id="tile-other-overdue">0</span>
+          <span class="tile-label">Overdue</span>
+        </button>
+        <button class="tile tile-follow" type="button" data-tile="other-week" title="Show other todos due in the next 7 days">
+          <span class="tile-value" id="tile-other-week">0</span>
+          <span class="tile-label">Due this week</span>
+        </button>
+        <button class="tile tile-await" type="button" data-tile="other-high" title="Show open high priority other todos">
+          <span class="tile-value" id="tile-other-high">0</span>
+          <span class="tile-label">High priority</span>
+        </button>
+      </section>
+
+      <section class="panel" id="other-panel" aria-labelledby="other-heading">
+        <div class="panel-head">
+          <h2 id="other-heading">Other todos <span class="count" id="other-count"></span></h2>
+          <div class="controls">
+            <label>Status
+              <select id="other-status">
+                <option value="open" selected>Open</option>
+                <option value="done">Done</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+            <label>Priority
+              <select id="other-priority">
+                <option value="all" selected>All</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label>Category
+              <select id="other-category">
+                <option value="all" selected>All</option>
+              </select>
+            </label>
+            <button class="btn btn-small" type="button" id="add-other-toggle" data-action="toggle-add" aria-expanded="false" aria-controls="add-other-form">Add todo</button>
+          </div>
+        </div>
+        <p class="panel-note">Everything the agent finds in your mail that is not recruiting: bills, school deadlines, forms, appointments, things to pick up. Each one links to the email it came from.</p>
+        <form id="add-other-form" class="add-todo-form" data-kind="other" hidden novalidate>
+          <label class="grow">Title
+            <input type="text" name="title" maxlength="200" placeholder="Pay the electricity bill, submit the housing form, ..." autocomplete="off" required>
+          </label>
+          <label>Priority
+            <select name="priority">
+              <option value="high">High</option>
+              <option value="medium" selected>Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <label>Due
+            <input type="date" name="due">
+          </label>
+          <label>Category
+            <select name="category" id="add-other-category"></select>
+          </label>
+          <label class="full">Notes
+            <textarea name="notes" rows="2" maxlength="1000" placeholder="Optional"></textarea>
+          </label>
+          <div class="add-todo-actions">
+            <button type="button" class="btn btn-small btn-quiet" data-action="cancel-add">Cancel</button>
+            <button type="submit" class="btn btn-small btn-primary">Add todo</button>
+          </div>
+          <p class="details-note full">Saved as a commit to the data repo, marked as yours. The agent reads it but never changes or closes it.</p>
+        </form>
+        <ul id="other-list" class="todo-list" data-kind="other"></ul>
+        <p id="other-empty" class="empty" hidden>No other todos match these filters.</p>
+        <p id="other-missing" class="empty" hidden>The data repo has no <code>data/other_todos.json</code> yet. Pull the latest tooling and run the agent once; it creates the file.</p>
+      </section>
+    </div>
   </main>
 
   <footer class="wrap foot">
-    <p>Data lives in <code>data/contacts.json</code> and <code>data/todos.json</code>. Edit them through the agent, run <code>scripts/validate.py</code>, commit, push. No servers, no cost.</p>
+    <p>Data lives in <code>data/contacts.json</code>, <code>data/todos.json</code> and <code>data/other_todos.json</code>. Edit them through the agent, run <code>scripts/validate.py</code>, commit, push. No servers, no cost.</p>
   </footer>
 
   <dialog id="github-dialog" class="dialog" aria-labelledby="github-dialog-title">
@@ -170,6 +258,6 @@
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="assets/app.js?v=202610251900"></script>
+  <script src="assets/app.js?v=202611041200"></script>
 </body>
 </html>
