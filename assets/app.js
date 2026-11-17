@@ -162,8 +162,17 @@
     return n !== null && n > 0;
   }
 
+  // Their message is the latest and something is owed. A scheduled call
+  // whose time is settled is not owed anything even when their acceptance
+  // was the last message; one with a time still to confirm carries a draft.
+  function owesReply(contact) {
+    if (contact.last_touch_by !== "them" || contact.stage === "closed") return false;
+    if (contact.stage === "call_scheduled" && !contact.draft_reply) return false;
+    return true;
+  }
+
   function isAwaitingMyReply(contact) {
-    return contact.last_touch_by === "them" && contact.stage !== "closed" && !isSnoozed(contact);
+    return owesReply(contact) && !isSnoozed(contact);
   }
 
   // Has this person ever written? first_reply is the agent's answer; until it
@@ -182,7 +191,7 @@
 
   function groupOf(c) {
     if (c.stage === "closed") return "closed";
-    if (c.last_touch_by === "them") return "needs_reply";
+    if (owesReply(c)) return "needs_reply";
     return everReplied(c) ? "in_conversation" : "no_reply";
   }
 
