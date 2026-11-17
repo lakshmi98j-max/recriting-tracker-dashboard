@@ -9,7 +9,7 @@
   <meta name="tracker-repo" content="lakshmi98j-max/recriting-tracker-2">
   <meta name="tracker-branch" content="main">
   <title>Recruiting Tracker</title>
-  <link rel="stylesheet" href="assets/style.css?v=202611171500">
+  <link rel="stylesheet" href="assets/style.css?v=202611171800">
 </head>
 <body>
   <header class="topbar">
@@ -31,6 +31,7 @@
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button class="tab" type="button" role="tab" id="tab-recruiting" data-tab="recruiting" aria-selected="true" aria-controls="view-recruiting">Recruiting</button>
       <button class="tab" type="button" role="tab" id="tab-other" data-tab="other" aria-selected="false" aria-controls="view-other">Other todos <span class="tab-count" id="other-open-count" hidden></span></button>
+      <button class="tab" type="button" role="tab" id="tab-ask" data-tab="ask" aria-selected="false" aria-controls="view-ask">Ask me <span class="tab-count tab-count-ask" id="ask-open-count" hidden></span></button>
     </nav>
 
     <div id="view-recruiting" class="view" role="tabpanel" aria-labelledby="tab-recruiting">
@@ -226,6 +227,28 @@
         <p id="other-missing" class="empty" hidden>The data repo has no <code>data/other_todos.json</code> yet. Pull the latest tooling and run the agent once; it creates the file.</p>
       </section>
     </div>
+
+    <div id="view-ask" class="view" role="tabpanel" aria-labelledby="tab-ask" hidden>
+      <section class="panel" id="ask-panel" aria-labelledby="ask-heading">
+        <div class="panel-head">
+          <h2 id="ask-heading">Ask me <span class="count" id="ask-count"></span></h2>
+          <div class="controls">
+            <label>Show
+              <select id="ask-status">
+                <option value="open" selected>Waiting for me</option>
+                <option value="answered">Answered, agent to act</option>
+                <option value="resolved">Resolved</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <p class="panel-note">Emails the agent was not sure about. Answer here and it acts on the next run: a tracked person becomes a contact and every later email from them is picked up; not recruiting is remembered and never asked again; an Other todo lands on that tab.</p>
+        <ul id="ask-list" class="todo-list"></ul>
+        <p id="ask-empty" class="empty" hidden>Nothing to answer.</p>
+        <p id="ask-missing" class="empty" hidden>The data repo has no <code>data/questions.json</code> yet. Pull the latest tooling and run the agent once; it writes the file.</p>
+      </section>
+    </div>
   </main>
 
   <footer class="wrap foot">
@@ -258,6 +281,6 @@
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="assets/app.js?v=202611171500"></script>
+  <script src="assets/app.js?v=202611171800"></script>
 </body>
 </html>

@@ -11,6 +11,10 @@
   var CONTACTS_URL = "data/contacts.json";
   var TODOS_URL = "data/todos.json";
   var OTHER_URL = "data/other_todos.json";
+  var QUESTIONS_URL = "data/questions.json";
+  var TABS = ["recruiting", "other", "ask"];
+  var ANSWER_LABELS = { track: "Track as recruiting", skip: "Not recruiting", other_todo: "Make it an Other todo" };
+  var QUESTION_KIND_LABELS = { recruiting_or_not: "Is this recruiting mail?", closed_owner_wrote: "You wrote to someone you closed", other: "Question" };
 
   // The two todo lists: recruiting (linked to people) and everything else the
   // agent finds in the mail. Separate files, separate id prefixes.
@@ -59,6 +63,9 @@
     todos: [],
     other: [],
     otherMissing: false,
+    questions: [],
+    questionsMissing: false,
+    questionsUpdated: null,
     contactsById: {},
     contactsUpdated: null,
     todosUpdated: null,
@@ -310,23 +317,23 @@
   // exist yet; a missing file means an empty list, not a broken page.
   function optional(promise) {
     return promise.then(function (payload) { return payload; }, function (err) {
-      if (err && (err.status === 404 || /HTTP 404/.test(err.message || ""))) return { missing: true, todos: [] };
+      if (err && (err.status === 404 || /HTTP 404/.test(err.message || ""))) return { missing: true, todos: [], questions: [] };
       throw err;
     });
   }
 
   function loadData() {
     if (github.token && github.repo) {
-      return Promise.all([loadFromGithub(CONTACTS_URL), loadFromGithub(TODOS_URL), optional(loadFromGithub(OTHER_URL))]).then(function (results) {
+      return Promise.all([loadFromGithub(CONTACTS_URL), loadFromGithub(TODOS_URL), optional(loadFromGithub(OTHER_URL)), optional(loadFromGithub(QUESTIONS_URL))]).then(function (results) {
         return { results: results, live: true };
       }, function (err) {
         // Fall back to the published copy so a bad token never blanks the page.
-        return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL), optional(loadJson(OTHER_URL))]).then(function (results) {
+        return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL), optional(loadJson(OTHER_URL)), optional(loadJson(QUESTIONS_URL))]).then(function (results) {
           return { results: results, live: false, warning: err && err.message ? err.message : String(err) };
         });
       });
     }
-    return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL), optional(loadJson(OTHER_URL))]).then(function (results) {
+    return Promise.all([loadJson(CONTACTS_URL), loadJson(TODOS_URL), optional(loadJson(OTHER_URL)), optional(loadJson(QUESTIONS_URL))]).then(function (results) {
       return { results: results, live: false };
     });
   }
@@ -362,6 +369,8 @@
   function renderMeta() {
     var parts = [];
     parts.push(plural(state.contacts.length, "contact") + ", " + plural(state.todos.length, "recruiting todo") + ", " + plural(state.other.length, "other todo"));
+    var openQuestions = state.questions.filter(function (q) { return questionState(q) === "open"; }).length;
+    if (openQuestions) parts.push(plural(openQuestions, "question") + " waiting");
     if (state.contactsUpdated) parts.push("contacts updated " + state.contactsUpdated);
     if (state.todosUpdated) parts.push("todos updated " + state.todosUpdated);
     parts.push(state.live ? "live from GitHub" : "published copy");
@@ -720,7 +729,87 @@
     renderTodoContactOptions();
     renderOtherCategoryOptions();
     renderOther();
+    renderAsk();
     renderPeople();
+  }
+
+  // ------------------------------------------------------------------
+  // Ask me: the agent's open questions, answered here, acted on next run
+  // ------------------------------------------------------------------
+
+  function questionState(q) {
+    if (q.status === "resolved") return "resolved";
+    return q.answer ? "answered" : "open";
+  }
+
+  function questionHtml(q) {
+    var st = questionState(q);
+    var head = [];
+    if (q.company) head.push("<span>" + escapeHtml(q.company) + "</span>");
+    head.push("<span>asked " + escapeHtml(formatDate(q.asked_on)) + "</span>");
+    if (q.kind && QUESTION_KIND_LABELS[q.kind]) head.push("<span>" + escapeHtml(QUESTION_KIND_LABELS[q.kind]) + "</span>");
+    if (q.thread_url) head.push(link(q.thread_url, "Gmail thread"));
+    var body;
+    if (st === "resolved") {
+      body = '<div class="q-answer">Resolved ' + escapeHtml(formatDate(q.resolved_on)) + (q.answer ? ", you said: " + escapeHtml(ANSWER_LABELS[q.answer] || q.answer) : "") + (q.result ? ". " + escapeHtml(q.result) : "") + "</div>";
+    } else if (st === "answered") {
+      body = '<div class="q-answer">You answered: ' + escapeHtml(ANSWER_LABELS[q.answer] || q.answer) + " on " + escapeHtml(formatDate(q.answered_on)) + ". The agent acts on its next run." +
+        '<button type="button" class="btn btn-small btn-quiet" data-action="unanswer" data-id="' + escapeHtml(q.id) + '">Change</button></div>';
+    } else {
+      body = '<div class="q-actions">' +
+        '<button type="button" class="btn btn-small btn-primary" data-action="answer" data-answer="track" data-id="' + escapeHtml(q.id) + '">Track as recruiting</button>' +
+        '<button type="button" class="btn btn-small" data-action="answer" data-answer="skip" data-id="' + escapeHtml(q.id) + '">Not recruiting</button>' +
+        '<button type="button" class="btn btn-small btn-quiet" data-action="answer" data-answer="other_todo" data-id="' + escapeHtml(q.id) + '">Make it an Other todo</button>' +
+        "</div>";
+    }
+    return '<li class="todo question ' + st + '" data-id="' + escapeHtml(q.id) + '">' +
+      '<div class="todo-main">' +
+      '<div class="todo-title">' + escapeHtml(q.sender || "Unknown sender") + (q.subject ? ': <span class="muted">' + escapeHtml(q.subject) + "</span>" : "") + "</div>" +
+      '<div class="todo-meta">' + head.join('<span class="sep">|</span>') + "</div>" +
+      (q.why ? '<div class="q-why">' + escapeHtml(q.why) + "</div>" : "") +
+      body +
+      "</div></li>";
+  }
+
+  function renderAsk() {
+    var want = el.askStatus.value;
+    var open = state.questions.filter(function (q) { return questionState(q) === "open"; });
+    el.askOpenCount.textContent = open.length;
+    el.askOpenCount.hidden = open.length === 0;
+    var rows = state.questions.filter(function (q) { return want === "all" || questionState(q) === want; });
+    rows.sort(function (a, b) { return String(b.asked_on || "").localeCompare(String(a.asked_on || "")) || String(b.id).localeCompare(String(a.id)); });
+    el.askCount.textContent = rows.length + " of " + state.questions.length;
+    el.askList.innerHTML = rows.map(questionHtml).join("");
+    el.askEmpty.hidden = rows.length > 0 || state.questionsMissing;
+    el.askMissing.hidden = !state.questionsMissing;
+  }
+
+  function answerQuestion(id, answer, button) {
+    if (!requireToken(function () { answerQuestion(id, answer, null); })) return;
+    setBusy(button, true);
+    var message = "update: " + id + (answer ? " answered " + answer : " answer cleared") + " (dashboard)";
+    saveRecord(QUESTIONS_URL, "questions", id, function (q, today) {
+      q.answer = answer || null;
+      q.answered_on = answer ? today : null;
+    }, message).then(function (saved) {
+      var local = findTodo(state.questions, id);
+      if (local) { local.answer = saved.answer; local.answered_on = saved.answered_on; local.updated_at = saved.updated_at; }
+      state.questionsUpdated = saved.updated_at;
+      state.live = true;
+      render();
+      toast(answer ? "Saved. The agent acts on this on its next run." : "Answer cleared.");
+    }).catch(function (err) {
+      setBusy(button, false);
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  }
+
+  function onAskClick(event) {
+    var button = event.target.closest ? event.target.closest("button[data-action]") : null;
+    if (!button || button.disabled) return;
+    var id = button.getAttribute("data-id");
+    if (button.getAttribute("data-action") === "answer") answerQuestion(id, button.getAttribute("data-answer"), button);
+    else if (button.getAttribute("data-action") === "unanswer") answerQuestion(id, "", button);
   }
 
   // ------------------------------------------------------------------
@@ -728,7 +817,7 @@
   // ------------------------------------------------------------------
 
   function setTab(name, pushHash) {
-    if (!KINDS[name]) name = "recruiting";
+    if (TABS.indexOf(name) === -1) name = "recruiting";
     state.tab = name;
     el.tabs.forEach(function (tab) {
       var active = tab.getAttribute("data-tab") === name;
@@ -736,8 +825,9 @@
     });
     el.viewRecruiting.hidden = name !== "recruiting";
     el.viewOther.hidden = name !== "other";
+    el.viewAsk.hidden = name !== "ask";
     if (pushHash !== false) {
-      var hash = name === "other" ? "#other" : "";
+      var hash = name === "recruiting" ? "" : "#" + name;
       if (window.location.hash !== hash) {
         try { history.replaceState(null, "", window.location.pathname + window.location.search + hash); } catch (e) { /* ignore */ }
       }
@@ -745,7 +835,8 @@
   }
 
   function tabFromHash() {
-    return window.location.hash === "#other" ? "other" : "recruiting";
+    var name = window.location.hash.replace(/^#/, "");
+    return TABS.indexOf(name) === -1 ? "recruiting" : name;
   }
 
   // ------------------------------------------------------------------
@@ -1449,6 +1540,8 @@
     el.otherStatus.addEventListener("change", function () { state.otherFilter = null; renderOther(); });
     el.otherPriority.addEventListener("change", function () { state.otherFilter = null; renderOther(); });
     el.otherCategory.addEventListener("change", function () { state.otherFilter = null; renderOther(); });
+    el.askStatus.addEventListener("change", renderAsk);
+    el.askList.addEventListener("click", onAskClick);
     el.tabs.forEach(function (tab) {
       tab.addEventListener("click", function () { setTab(tab.getAttribute("data-tab")); });
     });
@@ -1512,6 +1605,13 @@
     el.otherOpenCount = byId("other-open-count");
     el.viewRecruiting = byId("view-recruiting");
     el.viewOther = byId("view-other");
+    el.viewAsk = byId("view-ask");
+    el.askList = byId("ask-list");
+    el.askEmpty = byId("ask-empty");
+    el.askMissing = byId("ask-missing");
+    el.askCount = byId("ask-count");
+    el.askStatus = byId("ask-status");
+    el.askOpenCount = byId("ask-open-count");
     el.tabs = Array.prototype.slice.call(document.querySelectorAll(".tab[data-tab]"));
     loadGithubSettings();
     setTab(tabFromHash(), false);
@@ -1526,6 +1626,10 @@
         var contacts = unwrap(loaded.results[0], "contacts");
         var todos = unwrap(loaded.results[1], "todos");
         var other = unwrap(loaded.results[2], "todos");
+        var questions = unwrap(loaded.results[3], "questions");
+        state.questions = questions.rows;
+        state.questionsMissing = !!(loaded.results[3] && loaded.results[3].missing);
+        state.questionsUpdated = questions.updated;
         state.contacts = contacts.rows;
         state.todos = todos.rows;
         state.other = other.rows;
