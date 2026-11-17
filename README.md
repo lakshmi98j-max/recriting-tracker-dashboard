@@ -19,7 +19,7 @@ A job search is dozens of email threads at once: recruiters, coffee chats, refer
 
 - Two tabs. Recruiting holds everything below. Other todos is a separate list of what the agent finds in the rest of my mail: bills, school deadlines, forms, appointments, each linked to its email, with its own tiles, category filter and the same buttons. Recruiting mail never lands there.
 - Four tiles: open todos, high priority, follow-ups needed, awaiting my reply. Each one filters the lists below.
-- A todo list with status and priority filters. Mark done and Reopen commit the change straight to the data repo. Later moves a todo's due date with one click (tomorrow, 3 days, next Monday, a week, or any date).
+- A todo list with status and priority filters. Todos the agent linked to a person are hidden by default, since they repeat that person's next action below; a Show all switch brings them back. Mark done and Reopen commit the change straight to the data repo. Later moves a todo's due date with one click (tomorrow, 3 days, next Monday, a week, or any date).
 - Add todo, for things that did not come from an email. These are marked as mine; the agent reads them and may remind me about them but never changes or closes them.
 - A people table, one group at a time: Needs my reply (their message is the latest), No reply yet (I wrote, they never answered, oldest first) and In conversation (both sides have written, the next move is theirs, calls included), plus Closed and All. Each row: stage, last touch, next action, and a link that opens the exact Gmail thread. Search within a group.
 - A details row per person: the last message in the thread, a draft reply I can copy into Gmail, a "respond on" date that snoozes the person, and my own notes.

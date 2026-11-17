@@ -29,6 +29,7 @@
   var KEY_TOKEN = "tracker.github.token";
   var KEY_REPO = "tracker.github.repo";
   var KEY_API_BASE = "tracker.github.apiBase"; // override for GitHub Enterprise or tests
+  var KEY_SHOW_LINKED = "tracker.todos.showLinked"; // per-browser preference for the Show all switch
   var DEFAULT_API_BASE = "https://api.github.com";
 
   var STAGE_LABELS = {
@@ -65,6 +66,7 @@
     tab: "recruiting",
     peopleGroup: null,
     peopleStage: null,
+    showLinked: false,
     live: false,
     expanded: {},
     laterOpen: {}
@@ -428,15 +430,27 @@
     );
   }
 
+  // A todo the agent linked to a person repeats that person's next action in
+  // the People panel. Hidden here unless Show all is on. The owner's own
+  // todos always show: nothing else on the page carries them.
+  function isLinkedAgentTodo(t) {
+    return !!t.contact_id && t.source !== "dashboard";
+  }
+
   function renderTodos() {
     var status = el.todoStatus.value;
     var priority = el.todoPriority.value;
+    var hidden = 0;
     var rows = state.todos.filter(function (t) {
       if (status !== "all" && t.status !== status) return false;
       if (priority !== "all" && t.priority !== priority) return false;
+      if (!state.showLinked && isLinkedAgentTodo(t)) { hidden++; return false; }
       return true;
     }).sort(todoSort);
+    el.todoShowLinked.checked = state.showLinked;
     el.todoCount.textContent = rows.length + " of " + state.todos.length;
+    el.todoHiddenNote.hidden = hidden === 0;
+    el.todoHiddenNote.textContent = plural(hidden, "todo") + " linked to people " + (hidden === 1 ? "is" : "are") + " hidden. They show as next actions in People. Switch on Show all to see them here.";
     el.todoList.innerHTML = rows.map(function (t) { return todoHtml(t, KINDS.recruiting); }).join("");
     el.todoEmpty.hidden = rows.length > 0;
   }
@@ -673,6 +687,12 @@
     el.peopleCount.textContent = rows.length + " of " + state.contacts.length;
     el.peopleBody.innerHTML = rows.map(personHtml).join("");
     el.peopleEmpty.hidden = rows.length > 0;
+  }
+
+  function setShowLinked(on) {
+    state.showLinked = !!on;
+    storageSet(KEY_SHOW_LINKED, state.showLinked ? "1" : null);
+    renderTodos();
   }
 
   function setPeopleGroup(group, stageFilter) {
@@ -1164,12 +1184,12 @@
     if (tile === "open") {
       el.todoStatus.value = "open";
       el.todoPriority.value = "all";
-      renderTodos();
+      setShowLinked(true);
       byId("todos-panel").scrollIntoView({ behavior: "smooth", block: "start" });
     } else if (tile === "high") {
       el.todoStatus.value = "open";
       el.todoPriority.value = "high";
-      renderTodos();
+      setShowLinked(true);
       byId("todos-panel").scrollIntoView({ behavior: "smooth", block: "start" });
     } else if (tile === "follow") {
       setPeopleGroup("all", "follow_up_needed");
@@ -1350,6 +1370,7 @@
 
   function bind() {
     el.todoStatus.addEventListener("change", renderTodos);
+    el.todoShowLinked.addEventListener("change", function () { setShowLinked(el.todoShowLinked.checked); });
     el.todoPriority.addEventListener("change", renderTodos);
     el.peopleSegments.forEach(function (seg) {
       seg.addEventListener("click", function () { setPeopleGroup(seg.getAttribute("data-group"), null); });
@@ -1392,6 +1413,9 @@
     el.todoList = byId("todo-list");
     el.todoEmpty = byId("todo-empty");
     el.todoCount = byId("todo-count");
+    el.todoShowLinked = byId("todo-show-linked");
+    el.todoHiddenNote = byId("todo-hidden-note");
+    state.showLinked = storageGet(KEY_SHOW_LINKED) === "1";
     el.peopleSegments = Array.prototype.slice.call(document.querySelectorAll("#people-groups .seg[data-group]"));
     el.peopleGroupNote = byId("people-group-note");
     el.peopleStageChip = byId("people-stage-chip");

@@ -9,7 +9,7 @@
   <meta name="tracker-repo" content="lakshmi98j-max/recriting-tracker-2">
   <meta name="tracker-branch" content="main">
   <title>Recruiting Tracker</title>
-  <link rel="stylesheet" href="assets/style.css?v=202611171000">
+  <link rel="stylesheet" href="assets/style.css?v=202611171500">
 </head>
 <body>
   <header class="topbar">
@@ -73,6 +73,9 @@
               <option value="low">Low</option>
             </select>
           </label>
+          <label class="switch" title="Todos the agent linked to a person repeat that person's next action in the People panel, so they are hidden here unless you switch them on. Your own todos always show.">
+            <input type="checkbox" id="todo-show-linked"> Show all
+          </label>
           <button class="btn btn-small" type="button" id="add-todo-toggle" data-action="toggle-add" aria-expanded="false" aria-controls="add-todo-form">Add todo</button>
         </div>
       </div>
@@ -102,6 +105,7 @@
         </div>
         <p class="details-note full">Saved as a commit to the data repo, marked as yours. The agent reads it but never changes or closes it.</p>
       </form>
+      <p class="panel-note" id="todo-hidden-note" hidden></p>
       <ul id="todo-list" class="todo-list" data-kind="recruiting"></ul>
       <p id="todo-empty" class="empty" hidden>No todos match these filters.</p>
     </section>
@@ -254,6 +258,6 @@
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="assets/app.js?v=202611171000"></script>
+  <script src="assets/app.js?v=202611171500"></script>
 </body>
 </html>

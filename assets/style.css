@@ -599,6 +599,22 @@ tbody tr.details-row:hover td {
   color: var(--muted);
 }
 
+/* Show all switch on the todo panel */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.switch input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 /* People groups: one list at a time */
 
 .segments {
