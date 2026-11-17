@@ -178,7 +178,10 @@
   // Has this person ever written? first_reply is the agent's answer; until it
   // is backfilled, fall back on what the rest of the record implies.
   function everReplied(c) {
-    if (c.first_reply) return true;
+    // Once the agent has written first_reply (a date, or null for never),
+    // that is the answer. The guesses below are only for records it has
+    // not reached yet.
+    if (Object.prototype.hasOwnProperty.call(c, "first_reply")) return !!c.first_reply || c.last_touch_by === "them";
     if (c.last_touch_by === "them") return true;
     if (c.stage === "response_received" || c.stage === "call_scheduled") return true;
     if (c.last_message && c.last_message.from === "them") return true;
@@ -890,13 +893,52 @@
     });
   }
 
+  // A follow-up or reply todo marked done means the owner sent it. The same
+  // rule the agent follows in chat ("mark the Google follow-up done"): the
+  // contact's last touch becomes today by me, the stage follows, the draft
+  // is cleared, and a history line records it.
+  var SENT_TITLE_RE = /^(follow up|follow-up|reply|respond|send (a )?(follow|reply|thank))/i;
+
+  function markSentOnContact(todo, today) {
+    var contactId = todo.contact_id;
+    if (!contactId || !SENT_TITLE_RE.test(todo.title || "")) return Promise.resolve(null);
+    var isFollowUp = /^follow/i.test(todo.title || "");
+    return saveRecord(CONTACTS_URL, "contacts", contactId, function (contact) {
+      if (contact.stage === "closed") return;
+      contact.last_touch = today;
+      contact.last_touch_by = "me";
+      if (contact.stage !== "call_scheduled") contact.stage = "emailed";
+      contact.draft_reply = null;
+      var first = String(contact.name || "").split(" ")[0];
+      contact.next_action = "Wait for " + (first || "them") + " to reply, follow up again after " + formatDate(isoPlusDays(4));
+      contact.next_action_date = isoPlusDays(4);
+      if (!Array.isArray(contact.history)) contact.history = [];
+      contact.history.push({ date: today, event: (isFollowUp ? "Sent follow-up" : "Sent reply") + " (" + todo.id + " marked done on the dashboard)" });
+      if (contact.respond_on) {
+        contact.respond_on = null;
+        contact.history.push({ date: today, event: "Owner replied, planned respond date cleared" });
+      }
+    }, "update: " + contactId + (isFollowUp ? " follow-up sent" : " reply sent") + " (dashboard)").then(function (saved) {
+      if (saved && saved.stage !== "closed") {
+        var local = state.contactsById[contactId];
+        if (local) {
+          ["last_touch", "last_touch_by", "stage", "draft_reply", "next_action", "next_action_date", "history", "respond_on", "updated_at"].forEach(function (k) { local[k] = saved[k]; });
+        }
+        state.contactsUpdated = saved.updated_at;
+      }
+      return saved;
+    });
+  }
+
   function setTodoStatus(kind, id, status, button) {
     if (!requireToken(function () { setTodoStatus(kind, id, status, null); })) return;
     setBusy(button, true);
+    var savedTodo = null;
     saveRecord(kind.url, "todos", id, function (todo, today) {
       todo.status = status;
       todo.completed = status === "done" ? today : null;
     }, "update: " + id + (status === "done" ? " done" : " reopened") + " (dashboard)").then(function (saved) {
+      savedTodo = saved;
       var local = findTodo(state[kind.stateKey], id);
       if (local) {
         local.status = saved.status;
@@ -905,8 +947,11 @@
       }
       state[kind.updatedKey] = saved.updated_at;
       state.live = true;
+      if (kind.name === "recruiting" && status === "done") return markSentOnContact(saved, todayIso());
+      return null;
+    }).then(function (contact) {
       render();
-      toast("Saved " + id + " to GitHub.");
+      toast("Saved " + id + " to GitHub." + (contact ? " " + (contact.name || "The person") + " now shows as written to today." : ""));
     }).catch(function (err) {
       setBusy(button, false);
       toast(err && err.message ? err.message : String(err), true);
@@ -944,8 +989,19 @@
       copyContactFields(id, saved);
       state.contactsUpdated = saved.updated_at;
       state.live = true;
+      if (!closing) return [];
+      // A closed person's open todos go with them, so nothing dangles.
+      return saveFile(TODOS_URL, "todos", function (list, today) {
+        return list.filter(function (t) { return t.contact_id === id && t.status === "open"; })
+          .map(function (t) { t.status = "done"; t.completed = today; t.notes = ((t.notes || "") + " Closed with the contact on the dashboard.").trim(); return t; });
+      }, "update: todos for " + id + " done with close (dashboard)");
+    }).then(function (changedTodos) {
+      (changedTodos || []).forEach(function (t) {
+        var local = findTodo(state.todos, t.id);
+        if (local) { local.status = t.status; local.completed = t.completed; local.notes = t.notes; local.updated_at = t.updated_at; }
+      });
       render();
-      toast((closing ? "Closed " : "Reopened ") + id + " and saved to GitHub.");
+      toast((closing ? "Closed " : "Reopened ") + id + " and saved to GitHub." + (changedTodos && changedTodos.length ? " " + plural(changedTodos.length, "open todo") + " marked done with it." : ""));
     }).catch(function (err) {
       setBusy(button, false);
       toast(err && err.message ? err.message : String(err), true);
