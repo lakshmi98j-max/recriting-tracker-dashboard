@@ -41,6 +41,18 @@
   };
   var PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
 
+  // The people list shows one conversation group at a time. Which group a
+  // person is in follows from who wrote last and whether they have ever
+  // written at all.
+  var GROUPS = ["needs_reply", "no_reply", "in_conversation", "closed", "all"];
+  var GROUP_NOTES = {
+    needs_reply: "Their message is the latest one, so the next move is yours. Longest waiting first.",
+    no_reply: "You wrote and they have never answered, or you still have to reach out. Oldest first, so the stalest follow-up is at the top.",
+    in_conversation: "Both of you have written and the next move is theirs, calls already scheduled included. Next action first.",
+    closed: "Closed by you. Reopen puts someone back where the rules place them.",
+    all: "Everyone, soonest next action first."
+  };
+
   var state = {
     contacts: [],
     todos: [],
@@ -51,6 +63,8 @@
     todosUpdated: null,
     otherUpdated: null,
     tab: "recruiting",
+    peopleGroup: null,
+    peopleStage: null,
     live: false,
     expanded: {},
     laterOpen: {}
@@ -148,6 +162,39 @@
 
   function isAwaitingMyReply(contact) {
     return contact.last_touch_by === "them" && contact.stage !== "closed" && !isSnoozed(contact);
+  }
+
+  // Has this person ever written? first_reply is the agent's answer; until it
+  // is backfilled, fall back on what the rest of the record implies.
+  function everReplied(c) {
+    if (c.first_reply) return true;
+    if (c.last_touch_by === "them") return true;
+    if (c.stage === "response_received" || c.stage === "call_scheduled") return true;
+    if (c.last_message && c.last_message.from === "them") return true;
+    var history = Array.isArray(c.history) ? c.history : [];
+    for (var i = 0; i < history.length; i++) {
+      if (/^(they|she|he)\b|\b(replied|responded|wrote back)\b/i.test(history[i].event || "")) return true;
+    }
+    return false;
+  }
+
+  function groupOf(c) {
+    if (c.stage === "closed") return "closed";
+    if (c.last_touch_by === "them") return "needs_reply";
+    return everReplied(c) ? "in_conversation" : "no_reply";
+  }
+
+  // Oldest last_touch first; people with no touch at all go last.
+  function oldestTouchFirst(a, b) {
+    var la = parseDate(a.last_touch), lb = parseDate(b.last_touch);
+    if (la && lb && la.getTime() !== lb.getTime()) return la.getTime() - lb.getTime();
+    if (la && !lb) return -1;
+    if (!la && lb) return 1;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  }
+
+  function groupSort(group) {
+    return group === "no_reply" || group === "needs_reply" ? oldestTouchFirst : peopleSort;
   }
 
   // Date helpers for the Later presets: ISO date n days from today, and the
@@ -595,22 +642,43 @@
   }
 
   function renderPeople() {
-    var stage = el.peopleStage.value;
+    var counts = { needs_reply: 0, no_reply: 0, in_conversation: 0, closed: 0, all: state.contacts.length };
+    state.contacts.forEach(function (c) { counts[groupOf(c)]++; });
+    if (!state.peopleGroup) {
+      // First render: open the group that has something to do in it.
+      state.peopleGroup = counts.needs_reply ? "needs_reply" : counts.no_reply ? "no_reply" : counts.in_conversation ? "in_conversation" : "needs_reply";
+    }
+    var group = state.peopleGroup;
+    var stageFilter = state.peopleStage;
+    el.peopleSegments.forEach(function (seg) {
+      var name = seg.getAttribute("data-group");
+      seg.setAttribute("aria-selected", String(name === group));
+      var count = seg.querySelector(".seg-count");
+      if (count) count.textContent = counts[name];
+    });
+    el.peopleGroupNote.textContent = GROUP_NOTES[group] || "";
+    el.peopleStageChip.hidden = !stageFilter;
+    if (stageFilter) el.peopleStageChip.textContent = "Stage: " + (STAGE_LABELS[stageFilter] || stageFilter) + "  \u00d7";
     var q = el.peopleSearch.value.trim().toLowerCase();
     var rows = state.contacts.filter(function (c) {
-      if (stage === "active" && c.stage === "closed") return false;
-      if (stage === "awaiting" && !isAwaitingMyReply(c)) return false;
-      if (stage !== "all" && stage !== "active" && stage !== "awaiting" && c.stage !== stage) return false;
+      if (group !== "all" && groupOf(c) !== group) return false;
+      if (stageFilter && c.stage !== stageFilter) return false;
       if (q) {
         var hay = [c.name, c.email, c.company, c.role, c.next_action, c.notes, c.source, STAGE_LABELS[c.stage]]
           .join(" ").toLowerCase();
         if (hay.indexOf(q) === -1) return false;
       }
       return true;
-    }).sort(peopleSort);
+    }).sort(groupSort(group));
     el.peopleCount.textContent = rows.length + " of " + state.contacts.length;
     el.peopleBody.innerHTML = rows.map(personHtml).join("");
     el.peopleEmpty.hidden = rows.length > 0;
+  }
+
+  function setPeopleGroup(group, stageFilter) {
+    state.peopleGroup = GROUPS.indexOf(group) === -1 ? "all" : group;
+    state.peopleStage = stageFilter || null;
+    renderPeople();
   }
 
   function render() {
@@ -788,7 +856,7 @@
   function copyContactFields(id, saved) {
     var local = state.contactsById[id];
     if (!local) return;
-    ["stage", "next_action", "next_action_date", "draft_reply", "draft_request", "history", "respond_on", "owner_notes", "updated_at"].forEach(function (key) {
+    ["stage", "next_action", "next_action_date", "draft_reply", "draft_request", "history", "respond_on", "owner_notes", "first_reply", "updated_at"].forEach(function (key) {
       if (key in saved) local[key] = saved[key];
     });
   }
@@ -1104,12 +1172,10 @@
       renderTodos();
       byId("todos-panel").scrollIntoView({ behavior: "smooth", block: "start" });
     } else if (tile === "follow") {
-      el.peopleStage.value = "follow_up_needed";
-      renderPeople();
+      setPeopleGroup("all", "follow_up_needed");
       byId("people-panel").scrollIntoView({ behavior: "smooth", block: "start" });
     } else if (tile === "awaiting") {
-      el.peopleStage.value = "awaiting";
-      renderPeople();
+      setPeopleGroup("needs_reply", null);
       byId("people-panel").scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }
@@ -1285,7 +1351,10 @@
   function bind() {
     el.todoStatus.addEventListener("change", renderTodos);
     el.todoPriority.addEventListener("change", renderTodos);
-    el.peopleStage.addEventListener("change", renderPeople);
+    el.peopleSegments.forEach(function (seg) {
+      seg.addEventListener("click", function () { setPeopleGroup(seg.getAttribute("data-group"), null); });
+    });
+    el.peopleStageChip.addEventListener("click", function () { setPeopleGroup(state.peopleGroup, null); });
     el.peopleSearch.addEventListener("input", renderPeople);
     el.todoList.addEventListener("click", onTodoListClick);
     el.todoList.addEventListener("submit", onTodoListSubmit);
@@ -1323,7 +1392,9 @@
     el.todoList = byId("todo-list");
     el.todoEmpty = byId("todo-empty");
     el.todoCount = byId("todo-count");
-    el.peopleStage = byId("people-stage");
+    el.peopleSegments = Array.prototype.slice.call(document.querySelectorAll("#people-groups .seg[data-group]"));
+    el.peopleGroupNote = byId("people-group-note");
+    el.peopleStageChip = byId("people-stage-chip");
     el.peopleSearch = byId("people-search");
     el.peopleBody = byId("people-body");
     el.peopleEmpty = byId("people-empty");

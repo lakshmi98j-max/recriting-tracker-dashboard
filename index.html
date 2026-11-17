@@ -9,7 +9,7 @@
   <meta name="tracker-repo" content="lakshmi98j-max/recriting-tracker-2">
   <meta name="tracker-branch" content="main">
   <title>Recruiting Tracker</title>
-  <link rel="stylesheet" href="assets/style.css?v=202611041200">
+  <link rel="stylesheet" href="assets/style.css?v=202611171000">
 </head>
 <body>
   <header class="topbar">
@@ -110,24 +110,20 @@
       <div class="panel-head">
         <h2 id="people-heading">People <span class="count" id="people-count"></span></h2>
         <div class="controls">
-          <label>Stage
-            <select id="people-stage">
-              <option value="active" selected>Active (not closed)</option>
-              <option value="all">All</option>
-              <option value="awaiting">Awaiting my reply</option>
-              <option value="to_reach_out">To reach out</option>
-              <option value="emailed">Emailed</option>
-              <option value="follow_up_needed">Follow-up needed</option>
-              <option value="response_received">Response received</option>
-              <option value="call_scheduled">Call scheduled</option>
-              <option value="closed">Closed</option>
-            </select>
-          </label>
+          <button type="button" class="chip chip-filter" id="people-stage-chip" hidden></button>
           <label class="search">Search
             <input type="search" id="people-search" placeholder="name, company, role, notes" autocomplete="off">
           </label>
         </div>
       </div>
+      <div class="segments" role="tablist" aria-label="People groups" id="people-groups">
+        <button type="button" class="seg" role="tab" data-group="needs_reply" aria-selected="true">Needs my reply <span class="seg-count" data-count="needs_reply">0</span></button>
+        <button type="button" class="seg" role="tab" data-group="no_reply" aria-selected="false">No reply yet <span class="seg-count" data-count="no_reply">0</span></button>
+        <button type="button" class="seg" role="tab" data-group="in_conversation" aria-selected="false">In conversation <span class="seg-count" data-count="in_conversation">0</span></button>
+        <button type="button" class="seg seg-quiet" role="tab" data-group="closed" aria-selected="false">Closed <span class="seg-count" data-count="closed">0</span></button>
+        <button type="button" class="seg seg-quiet" role="tab" data-group="all" aria-selected="false">All <span class="seg-count" data-count="all">0</span></button>
+      </div>
+      <p class="panel-note" id="people-group-note"></p>
       <div class="table-wrap">
         <table id="people-table">
           <thead>
@@ -258,6 +254,6 @@
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="assets/app.js?v=202611041200"></script>
+  <script src="assets/app.js?v=202611171000"></script>
 </body>
 </html>
